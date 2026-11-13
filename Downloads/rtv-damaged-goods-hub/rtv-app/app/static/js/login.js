@@ -65,12 +65,7 @@ var RtvLogin = (function () {
           RtvUI.el("p", {}, ["Masuk untuk mengelola retur barang rusak"]),
         ]),
       ]),
-      form,
-      RtvUI.el("div", { class: "rtv-login-hint", html:
-        "<b>Akun demo (multi role):</b><br>" +
-        "staff_toko / Toko@1234 &bull; staff_gudang / Gudang@1234 &bull; admin / Admin@1234" +
-        "<br><span style='opacity:.8'>Jalankan <code>python scripts/seed_data.py</code> untuk membuat akun ini.</span>",
-      }),
+            form,
     ]);
 
     return RtvUI.el("div", { class: "rtv-login-screen" }, [card]);
