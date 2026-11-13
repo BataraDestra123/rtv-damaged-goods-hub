@@ -108,7 +108,70 @@ var RtvAdmin = (function () {
       tableWrap,
     ]);
 
-    RtvUI.mount(container, RtvUI.el("div", {}, [kpiGrid, kerugianCard, RtvUI.el("div", { style: { height: "18px" } }), peringatanCard]));
+    var trenChartWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+    var trenCard = RtvUI.el("div", { class: "rtv-card" }, [
+      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Tren Retur (6 Bulan Terakhir)"])]),
+      trenChartWrap,
+    ]);
+
+    var kategoriChartWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+    var kategoriCard = RtvUI.el("div", { class: "rtv-card" }, [
+      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Distribusi Kategori Kerusakan"])]),
+      kategoriChartWrap,
+    ]);
+
+    var chartRow = RtvUI.el("div", { class: "rtv-chart-row" }, [trenCard, kategoriCard]);
+
+    RtvUI.mount(
+      container,
+      RtvUI.el("div", {}, [
+        kpiGrid,
+        kerugianCard,
+        RtvUI.el("div", { style: { height: "18px" } }),
+        chartRow,
+        RtvUI.el("div", { style: { height: "18px" } }),
+        peringatanCard,
+      ])
+    );
+
+    var BULAN_SINGKAT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+    RtvApi.get("/api/dashboard/tren-status")
+      .then(function (data) {
+        var items = data.items || [];
+        var byMonth = {};
+        var order = [];
+        items.forEach(function (row) {
+          var key = row._id.year + "-" + row._id.month;
+          if (!byMonth[key]) {
+            byMonth[key] = { label: BULAN_SINGKAT[row._id.month - 1] + " " + row._id.year, value: 0 };
+            order.push(key);
+          }
+          byMonth[key].value += row.jumlah;
+        });
+        var chartData = order.map(function (k) { return byMonth[k]; });
+        if (!chartData.length) {
+          RtvUI.mount(trenChartWrap, RtvUI.el("div", { class: "rtv-table-empty" }, ["Belum ada data retur 6 bulan terakhir."]));
+          return;
+        }
+        RtvUI.mount(trenChartWrap, RtvUI.el("div", { html: RtvUI.barChart({ data: chartData, color: "var(--rtv-blue)" }) }));
+      })
+      .catch(rtvHandleError);
+
+    RtvApi.get("/api/dashboard/kategori-kerusakan")
+      .then(function (data) {
+        var items = data.items || [];
+        var chartData = items.map(function (r) { return { label: r.kategori, value: r.jumlah }; });
+        var result = RtvUI.donutChart({ data: chartData, size: 160 });
+        RtvUI.mount(
+          kategoriChartWrap,
+          RtvUI.el("div", { class: "rtv-donut-wrap" }, [
+            RtvUI.el("div", { html: result.svg }),
+            RtvUI.el("div", { class: "rtv-legend", html: result.legend }),
+          ])
+        );
+      })
+      .catch(rtvHandleError);
 
     RtvApi.get("/api/dashboard/summary")
       .then(function (data) {
@@ -173,10 +236,11 @@ var RtvAdmin = (function () {
               { header: "Kategori", render: function (r) { return RtvUI.escapeHtml(r.kategori_kerusakan); }, width: "130px" },
               { header: "Batch", render: function (r) { return RtvUI.escapeHtml(r.batch || "-"); }, width: "100px" },
               {
-                header: "Aksi", width: "170px",
+                header: "Aksi", width: "250px",
                 render: function (r) {
                   return "<button type='button' class='rtv-link-btn' data-action='setuju' data-id='" + r._id + "'>Setujui</button>" +
-                    "<button type='button' class='rtv-link-btn danger' data-action='tolak' data-id='" + r._id + "'>Tolak</button>";
+                    "<button type='button' class='rtv-link-btn danger' data-action='tolak' data-id='" + r._id + "'>Tolak</button>" +
+                    "<button type='button' class='rtv-link-btn' data-action='riwayat' data-id='" + r._id + "'>Riwayat</button>";
                 },
               },
             ],
@@ -187,6 +251,7 @@ var RtvAdmin = (function () {
               if (!row) return;
               if (action === "setuju") verifikasi(row, true);
               if (action === "tolak") verifikasi(row, false);
+              if (action === "riwayat") rtvOpenRiwayatModal(row._id, row.no_rtv);
             },
           });
           RtvUI.mount(tableWrap, table);

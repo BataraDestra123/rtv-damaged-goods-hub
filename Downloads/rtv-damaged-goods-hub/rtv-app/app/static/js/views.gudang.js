@@ -44,17 +44,20 @@ var RtvGudang = (function () {
               { header: "Alasan", render: function (r) { return RtvUI.escapeHtml(r.alasan); }, width: "220px" },
               { header: "Tgl Ajuan", render: function (r) { return rtvFormatDate(r.tgl_input); }, width: "130px" },
               {
-                header: "Aksi", width: "100px",
-                render: function (r) { return "<button type='button' class='rtv-link-btn' data-action='terima' data-id='" + r._id + "'>Terima</button>"; },
+                header: "Aksi", width: "180px",
+                render: function (r) {
+                  return "<button type='button' class='rtv-link-btn' data-action='terima' data-id='" + r._id + "'>Terima</button>" +
+                    "<button type='button' class='rtv-link-btn' data-action='riwayat' data-id='" + r._id + "'>Riwayat</button>";
+                },
               },
             ],
             rows: rows,
             emptyText: "Tidak ada retur pending saat ini.",
             onRowAction: function (action, id) {
-              if (action === "terima") {
-                var row = rows.find(function (r) { return r._id === id; });
-                if (row) openTerimaModal(row, loadPending);
-              }
+              var row = rows.find(function (r) { return r._id === id; });
+              if (!row) return;
+              if (action === "terima") openTerimaModal(row, loadPending);
+              if (action === "riwayat") rtvOpenRiwayatModal(row._id, row.no_rtv);
             },
           });
           RtvUI.mount(tableWrap, table);

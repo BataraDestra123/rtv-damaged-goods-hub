@@ -183,20 +183,23 @@ var RtvToko = (function () {
               { header: "Status", render: function (r) { return rtvStatusBadge(r.status); }, width: "180px" },
               { header: "Tgl Ajuan", render: function (r) { return rtvFormatDate(r.tgl_input); }, width: "130px" },
               {
-                header: "Aksi", width: "110px",
+                header: "Aksi", width: "190px",
                 render: function (r) {
-                  if (r.status !== "Pending") return "";
-                  return "<button type='button' class='rtv-link-btn danger' data-action='batal' data-id='" + r._id + "'>Batalkan</button>";
+                  var html = "<button type='button' class='rtv-link-btn' data-action='riwayat' data-id='" + r._id + "'>Riwayat</button>";
+                  if (r.status === "Pending") {
+                    html += "<button type='button' class='rtv-link-btn danger' data-action='batal' data-id='" + r._id + "'>Batalkan</button>";
+                  }
+                  return html;
                 },
               },
             ],
             rows: rows,
             emptyText: "Tidak ada data untuk filter ini.",
             onRowAction: function (action, id) {
-              if (action === "batal") {
-                var row = rows.find(function (r) { return r._id === id; });
-                if (row) confirmBatalkan(row);
-              }
+              var row = rows.find(function (r) { return r._id === id; });
+              if (!row) return;
+              if (action === "batal") confirmBatalkan(row);
+              if (action === "riwayat") rtvOpenRiwayatModal(row._id, row.no_rtv);
             },
           });
           RtvUI.mount(tableWrap, table);

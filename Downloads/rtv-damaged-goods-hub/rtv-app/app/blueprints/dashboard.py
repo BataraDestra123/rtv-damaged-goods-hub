@@ -154,3 +154,17 @@ def tren_status():
     ]
     rows = list(db.rtv_transactions.aggregate(pipeline))
     return jsonify({"items": jsonable(rows)})
+
+
+@bp.get("/kategori-kerusakan")
+@role_required("admin")
+def kategori_kerusakan():
+    """Distribusi jumlah retur per kategori kerusakan (untuk pie/donut chart dashboard)."""
+    db = get_db()
+    pipeline = [
+        {"$match": {"kategori_kerusakan": {"$ne": None}}},
+        {"$group": {"_id": "$kategori_kerusakan", "jumlah": {"$sum": 1}}},
+        {"$sort": {"jumlah": -1}},
+    ]
+    rows = list(db.rtv_transactions.aggregate(pipeline))
+    return jsonify({"items": [{"kategori": r["_id"], "jumlah": r["jumlah"]} for r in rows]})

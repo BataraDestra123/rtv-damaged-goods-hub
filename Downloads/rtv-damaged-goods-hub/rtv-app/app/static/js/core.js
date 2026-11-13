@@ -285,6 +285,94 @@ var RtvUI = (function () {
     window.addEventListener("hashchange", routerDispatch);
   }
 
+  // ---------------- Grafik (Bar Chart & Donut Chart) ----------------
+  // Dibuat dari SVG mentah (tanpa library chart pihak ketiga), supaya
+  // konsisten dengan filosofi aplikasi yang tidak bergantung ke CDN UI
+  // eksternal (seperti Webix yang sudah dihapus sebelumnya).
+  function barChart(opts) {
+    opts = opts || {};
+    var width = opts.width || 560;
+    var height = opts.height || 220;
+    var padding = { top: 20, right: 16, bottom: 36, left: 34 };
+    var data = opts.data || [];
+    var maxVal = Math.max.apply(null, data.map(function (d) { return d.value; }).concat([1]));
+    var chartW = width - padding.left - padding.right;
+    var chartH = height - padding.top - padding.bottom;
+    var barGap = 14;
+    var barW = data.length ? Math.max(8, chartW / data.length - barGap) : 0;
+
+    var gridLines = "";
+    var ticks = 4;
+    for (var t = 0; t <= ticks; t++) {
+      var y = padding.top + chartH - (chartH * t) / ticks;
+      var val = Math.round((maxVal * t) / ticks);
+      gridLines +=
+        '<line x1="' + padding.left + '" y1="' + y + '" x2="' + (width - padding.right) + '" y2="' + y +
+        '" stroke="var(--rtv-border)" stroke-width="1"></line>' +
+        '<text x="' + (padding.left - 8) + '" y="' + (y + 4) + '" text-anchor="end" font-size="10" fill="var(--rtv-text-muted)">' + val + "</text>";
+    }
+
+    var bars = "";
+    var labels = "";
+    data.forEach(function (d, i) {
+      var barH = maxVal > 0 ? (d.value / maxVal) * chartH : 0;
+      var x = padding.left + i * (barW + barGap) + barGap / 2;
+      var y = padding.top + chartH - barH;
+      bars +=
+        '<rect x="' + x + '" y="' + y + '" width="' + barW + '" height="' + Math.max(barH, 1) +
+        '" rx="4" fill="' + (opts.color || "var(--rtv-blue)") + '"></rect>' +
+        '<text x="' + (x + barW / 2) + '" y="' + (y - 6) + '" text-anchor="middle" font-size="11" font-weight="600" fill="var(--rtv-text)">' + d.value + "</text>";
+      labels +=
+        '<text x="' + (x + barW / 2) + '" y="' + (height - padding.bottom + 18) + '" text-anchor="middle" font-size="10.5" fill="var(--rtv-text-muted)">' +
+        escapeHtml(d.label) + "</text>";
+    });
+
+    return (
+      '<svg viewBox="0 0 ' + width + " " + height + '" width="100%" height="' + height + '" xmlns="http://www.w3.org/2000/svg">' +
+      gridLines + bars + labels + "</svg>"
+    );
+  }
+
+  function donutChart(opts) {
+    opts = opts || {};
+    var data = (opts.data || []).filter(function (d) { return d.value > 0; });
+    var size = opts.size || 180;
+    var cx = size / 2, cy = size / 2, r = size / 2 - 8, inner = r * 0.6;
+    var total = data.reduce(function (s, d) { return s + d.value; }, 0) || 1;
+    var colors = opts.colors || ["#2f7ed8", "#f2994a", "#27ae60", "#9673a6", "#e4584c", "#17a2b8", "#e0b029"];
+
+    if (!data.length) {
+      return { svg: '<div class="rtv-table-empty">Belum ada data.</div>', legend: "" };
+    }
+
+    var startAngle = -90;
+    var paths = "";
+    var legend = "";
+    data.forEach(function (d, i) {
+      var angle = (d.value / total) * 360;
+      var endAngle = startAngle + angle;
+      var large = angle > 180 ? 1 : 0;
+      var rad = Math.PI / 180;
+      var x1 = cx + r * Math.cos(startAngle * rad), y1 = cy + r * Math.sin(startAngle * rad);
+      var x2 = cx + r * Math.cos(endAngle * rad), y2 = cy + r * Math.sin(endAngle * rad);
+      var ix1 = cx + inner * Math.cos(startAngle * rad), iy1 = cy + inner * Math.sin(startAngle * rad);
+      var ix2 = cx + inner * Math.cos(endAngle * rad), iy2 = cy + inner * Math.sin(endAngle * rad);
+      var color = colors[i % colors.length];
+      paths +=
+        '<path d="M' + x1 + "," + y1 + " A" + r + "," + r + " 0 " + large + " 1 " + x2 + "," + y2 +
+        " L" + ix2 + "," + iy2 + " A" + inner + "," + inner + " 0 " + large + " 0 " + ix1 + "," + iy1 +
+        ' Z" fill="' + color + '"></path>';
+      var pct = Math.round((d.value / total) * 100);
+      legend +=
+        '<div class="rtv-legend-item"><span class="rtv-legend-dot" style="background:' + color + '"></span>' +
+        escapeHtml(d.label) + " <b>" + d.value + "</b> (" + pct + "%)</div>";
+      startAngle = endAngle;
+    });
+
+    var svg = '<svg viewBox="0 0 ' + size + " " + size + '" width="' + size + '" height="' + size + '" xmlns="http://www.w3.org/2000/svg">' + paths + "</svg>";
+    return { svg: svg, legend: legend };
+  }
+
   return {
     escapeHtml: escapeHtml,
     el: el,
@@ -297,6 +385,8 @@ var RtvUI = (function () {
     renderTableHtml: renderTableHtml,
     spinner: spinner,
     pageLoading: pageLoading,
+    barChart: barChart,
+    donutChart: donutChart,
     router: {
       register: routerRegister,
       setDefault: routerSetDefault,

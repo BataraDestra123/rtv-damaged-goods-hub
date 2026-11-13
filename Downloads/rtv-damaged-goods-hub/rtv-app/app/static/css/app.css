@@ -421,6 +421,35 @@ table.rtv-table tbody tr:last-child td { border-bottom: none; }
 .rtv-modal-body { padding: 20px 22px; overflow-y: auto; }
 .rtv-modal-footer { padding: 16px 22px; border-top: 1px solid var(--rtv-border); display: flex; justify-content: flex-end; gap: 10px; }
 
+/* ---------------- Grafik Dashboard ---------------- */
+
+.rtv-chart-row { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: stretch; }
+.rtv-donut-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center; }
+.rtv-legend { display: flex; flex-direction: column; gap: 8px; }
+.rtv-legend-item { font-size: 13px; color: var(--rtv-text); display: flex; align-items: center; gap: 8px; }
+.rtv-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: 0 0 10px; }
+@media (max-width: 900px) {
+  .rtv-chart-row { grid-template-columns: 1fr; }
+}
+
+/* ---------------- Timeline (Riwayat Aktivitas) ---------------- */
+
+.rtv-timeline { display: flex; flex-direction: column; padding: 4px 2px; }
+.rtv-timeline-item { display: flex; gap: 14px; position: relative; padding-bottom: 22px; }
+.rtv-timeline-item:last-child { padding-bottom: 0; }
+.rtv-timeline-item:not(:last-child)::before {
+  content: ""; position: absolute; left: 15px; top: 32px; bottom: -4px; width: 2px;
+  background: var(--rtv-border);
+}
+.rtv-timeline-dot {
+  flex: 0 0 32px; width: 32px; height: 32px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 13px; z-index: 1; box-shadow: var(--rtv-shadow);
+}
+.rtv-timeline-body { padding-top: 4px; }
+.rtv-timeline-title { font-weight: 600; font-size: 13.5px; color: var(--rtv-text); }
+.rtv-timeline-meta { font-size: 12px; color: var(--rtv-text-muted); margin-top: 2px; }
+
 /* ---------------- Toast ---------------- */
 
 .rtv-toast-stack { position: fixed; top: 18px; right: 18px; z-index: 200; display: flex; flex-direction: column; gap: 10px; }

@@ -1,11 +1,11 @@
 """
 Endpoint read-only yang dipakai lintas role (dropdown produk, supplier, dsb).
 """
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from ..db import get_db
-from ..security import login_required
-from ..utils import jsonable
+from ..security import ApiError, login_required
+from ..utils import jsonable, to_object_id
 
 bp = Blueprint("common", __name__)
 
@@ -46,4 +46,31 @@ def list_store():
 def list_shift():
     db = get_db()
     cursor = db.master_shift.find({}).sort("nama_shift", 1)
+    return jsonify({"items": [jsonable(d) for d in cursor]})
+
+
+@bp.get("/rtv/<rtv_id>/riwayat")
+@login_required
+def riwayat_rtv(rtv_id):
+    """Riwayat/log aktivitas (audit trail) untuk satu transaksi RTV.
+
+    Dipakai oleh fitur "Timeline Status" di sisi Toko, Gudang, dan Admin.
+    Memakai data yang sudah lama dicatat lewat record_audit() di tiap
+    blueprint (ajukan_retur, batalkan, terima_barang, verifikasi, dst),
+    jadi tidak perlu menambah logika pencatatan baru -- cukup dibaca ulang.
+    """
+    db = get_db()
+    oid = to_object_id(rtv_id, field="rtv_id")
+
+    trx = db.rtv_transactions.find_one({"_id": oid})
+    if not trx:
+        raise ApiError("Data RTV tidak ditemukan.", status_code=404, code="not_found")
+
+    # Staff toko hanya boleh melihat riwayat RTV milik tokonya sendiri.
+    if g.user.get("role") == "staff_toko" and trx.get("store_id") != g.user.get("store_id"):
+        raise ApiError("Anda tidak berhak melihat riwayat RTV ini.", status_code=403, code="forbidden")
+
+    cursor = db.audit_logs.find(
+        {"collection": "rtv_transactions", "document_id": str(oid)}
+    ).sort("tgl", 1)
     return jsonify({"items": [jsonable(d) for d in cursor]})
