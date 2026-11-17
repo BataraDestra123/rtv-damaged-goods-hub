@@ -30,9 +30,9 @@ class Config:
     MAX_CONTENT_LENGTH = 4 * 1024 * 1024
 
     # --- Identitas aplikasi (ubah di sini / lewat environment variable untuk ganti nama) ---
-    APP_NAME = os.environ.get("APP_NAME", "RTV & Damaged Goods Hub")
-    APP_SHORT_NAME = os.environ.get("APP_SHORT_NAME", "RTV Hub")
-    APP_SUBTITLE = os.environ.get("APP_SUBTITLE", "Damaged Goods")
+    APP_NAME = os.environ.get("APP_NAME", "SIRETUR")
+    APP_SHORT_NAME = os.environ.get("APP_SHORT_NAME", "SIRETUR")
+    APP_SUBTITLE = os.environ.get("APP_SUBTITLE", "Sistem Retur Barang")
     APP_TAGLINE = os.environ.get("APP_TAGLINE", "Masuk untuk mengelola retur barang rusak")
     APP_VERSION = "2.0.0"  # juga dipakai sebagai penanda cache file CSS/JS
 
