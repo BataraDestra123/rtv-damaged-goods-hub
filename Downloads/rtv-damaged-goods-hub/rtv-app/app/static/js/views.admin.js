@@ -1,11 +1,14 @@
 /**
  * Views untuk role Admin / Supervisor:
- *  - Dashboard ringkasan + peringatan stok
- *  - Verifikasi RTV (Approve / Reject)
- *  - Buat & kelola Surat Jalan ke Supplier, selesaikan klaim
+ *  - Dashboard ringkasan + peringatan stok + insight lanjutan (skor vendor,
+ *    perbandingan toko, tren nilai kerugian, ringkasan klaim vendor)
+ *  - Verifikasi RTV (Approve / Reject dengan catatan + lihat foto + cetak)
+ *  - Buat & kelola Surat Jalan ke Supplier, selesaikan klaim (status,
+ *    nilai kredit, no. credit note) + cetak surat jalan
  *  - Kelola Master Data (Supplier, Produk, Toko, Shift)
- *  - Kelola Karyawan (tambah/ubah/nonaktifkan/pindahkan)
- *  - Laporan rekap per supplier
+ *  - Kelola Karyawan (tambah/ubah/nonaktifkan/pindahkan) + Setujui/Tolak
+ *    akun hasil pendaftaran mandiri
+ *  - Laporan rekap per supplier + Log Aktivitas (audit) + Ekspor data RTV
  * Vanilla JS, tanpa Webix.
  */
 var RtvAdmin = (function () {
@@ -82,6 +85,31 @@ var RtvAdmin = (function () {
     ]);
   }
 
+  function kpiCardTrend(icon, color, label, value, deltaPct, deltaIsBadWhenUp) {
+    var body = [
+      RtvUI.el("div", { class: "rtv-kpi-value" }, [String(value)]),
+      RtvUI.el("div", { class: "rtv-kpi-label" }, [label]),
+    ];
+    if (deltaPct !== null && deltaPct !== undefined) {
+      var up = deltaPct > 0;
+      var bad = deltaIsBadWhenUp ? up : !up;
+      var cls = deltaPct === 0 ? "" : bad ? "up" : "down";
+      var arrow = deltaPct === 0 ? "→" : up ? "↑" : "↓";
+      body.push(RtvUI.el("div", { class: "rtv-kpi-trend " + cls }, [arrow + " " + Math.abs(deltaPct) + "% vs periode sebelumnya"]));
+    }
+    return RtvUI.el("div", { class: "rtv-kpi-card" }, [
+      RtvUI.el("div", { class: "rtv-kpi-icon", style: { background: color } }, [RtvUI.el("i", { class: "fa-solid " + icon })]),
+      RtvUI.el("div", { class: "rtv-kpi-body" }, body),
+    ]);
+  }
+
+  function miniTable(title, columns, rows, emptyText) {
+    return RtvUI.el("div", {}, [
+      RtvUI.el("div", { class: "rtv-mini-table-title" }, [title]),
+      RtvUI.renderTableHtml({ columns: columns, rows: rows || [], emptyText: emptyText || "Belum ada data." }),
+    ]);
+  }
+
   // ======================================================================
   // Dashboard
   // ======================================================================
@@ -110,7 +138,7 @@ var RtvAdmin = (function () {
 
     var trenChartWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
     var trenCard = RtvUI.el("div", { class: "rtv-card" }, [
-      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Tren Retur (6 Bulan Terakhir)"])]),
+      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Tren Jumlah Retur (6 Bulan Terakhir)"])]),
       trenChartWrap,
     ]);
 
@@ -122,6 +150,38 @@ var RtvAdmin = (function () {
 
     var chartRow = RtvUI.el("div", { class: "rtv-chart-row" }, [trenCard, kategoriCard]);
 
+    // ---- Insight lanjutan (klaim vendor, skor vendor, perbandingan toko) ----
+    var periodBtns = {};
+    var periodSelect = RtvUI.el("div", { class: "rtv-period-select" });
+    [[30, "30 Hari"], [90, "90 Hari"], [180, "6 Bulan"], [365, "1 Tahun"]].forEach(function (p) {
+      var btn = RtvUI.el("button", { type: "button", onclick: function () { loadInsight(p[0]); } }, [p[1]]);
+      periodBtns[p[0]] = btn;
+      periodSelect.appendChild(btn);
+    });
+
+    var insightKpiGrid = RtvUI.el("div", { class: "rtv-kpi-grid" }, [RtvUI.pageLoading()]);
+    var insightTrenWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+    var insightTrenCard = RtvUI.el("div", { class: "rtv-card" }, [
+      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Tren Nilai Kerugian (Rp)"])]),
+      insightTrenWrap,
+    ]);
+    var vendorTableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+    var tokoTableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+
+    var insightSection = RtvUI.el("div", { class: "rtv-card" }, [
+      RtvUI.el("div", { class: "rtv-card-header" }, [
+        RtvUI.el("h3", {}, ["Insight Lanjutan"]),
+        periodSelect,
+      ]),
+      insightKpiGrid,
+      RtvUI.el("div", { style: { height: "16px" } }),
+      insightTrenCard,
+      RtvUI.el("div", { style: { height: "16px" } }),
+      RtvUI.el("div", { class: "rtv-grid-2", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" } }, [
+        vendorTableWrap, tokoTableWrap,
+      ]),
+    ]);
+
     RtvUI.mount(
       container,
       RtvUI.el("div", {}, [
@@ -131,6 +191,8 @@ var RtvAdmin = (function () {
         chartRow,
         RtvUI.el("div", { style: { height: "18px" } }),
         peringatanCard,
+        RtvUI.el("div", { style: { height: "18px" } }),
+        insightSection,
       ])
     );
 
@@ -195,6 +257,66 @@ var RtvAdmin = (function () {
         RtvUI.mount(tableWrap, table);
       })
       .catch(rtvHandleError);
+
+    function loadInsight(days) {
+      Object.keys(periodBtns).forEach(function (k) { periodBtns[k].classList.toggle("active", Number(k) === days); });
+      RtvUI.mount(insightKpiGrid, RtvUI.pageLoading());
+      RtvUI.mount(insightTrenWrap, RtvUI.pageLoading());
+      RtvUI.mount(vendorTableWrap, RtvUI.pageLoading());
+      RtvUI.mount(tokoTableWrap, RtvUI.pageLoading());
+
+      RtvApi.get("/api/x/insight?days=" + days)
+        .then(function (data) {
+          var k = data.kpi;
+          RtvUI.mount(insightKpiGrid, RtvUI.el("div", { class: "rtv-kpi-grid" }, [
+            kpiCardTrend("fa-rotate", "var(--rtv-blue)", "Total RTV Diajukan", k.total_rtv, k.total_rtv_delta, false),
+            kpiCardTrend("fa-sack-dollar", "var(--rtv-red)", "Kerugian Periode Ini", rtvFormatCurrency(k.kerugian), k.kerugian_delta, true),
+            kpiCardTrend("fa-ban", "var(--rtv-orange)", "% Retur Ditolak", k.persen_ditolak + "%", null, true),
+            kpiCard("fa-stopwatch", "var(--rtv-teal)", "Rata² Hari s/d Verifikasi", k.rata_hari_verifikasi + " hari"),
+            kpiCard("fa-file-invoice-dollar", "var(--rtv-green)", "Klaim Kredit Diterima", rtvFormatCurrency(k.klaim_kredit_diterima)),
+            kpiCard("fa-hourglass", "var(--rtv-yellow)", "Klaim Masih Menggantung", rtvFormatCurrency(k.klaim_menggantung)),
+          ]));
+
+          if (!data.tren.length || !data.tren.some(function (t) { return t.jumlah > 0; })) {
+            RtvUI.mount(insightTrenWrap, RtvUI.el("div", { class: "rtv-table-empty" }, ["Belum ada data pada periode ini."]));
+          } else {
+            var chartData = data.tren.map(function (t) {
+              var d = new Date(t.tanggal);
+              return { label: d.toLocaleDateString("id-ID", { day: "2-digit", month: "short" }), value: Math.round(t.nilai) };
+            });
+            RtvUI.mount(insightTrenWrap, RtvUI.el("div", { html: RtvUI.barChart({ data: chartData, color: "var(--rtv-red)", width: 760, height: 220 }) }));
+          }
+
+          RtvUI.mount(vendorTableWrap, miniTable(
+            "Skor Vendor (Supplier) — diurutkan dari nilai kerugian tertinggi",
+            [
+              { header: "Supplier", render: function (r) { return RtvUI.escapeHtml(r.supplier); } },
+              { header: "Jml RTV", render: function (r) { return r.jumlah; }, width: "70px" },
+              { header: "Nilai", render: function (r) { return rtvFormatCurrency(r.nilai); }, width: "110px" },
+              { header: "% Ditolak", render: function (r) { return r.persen_ditolak + "%"; }, width: "80px" },
+              { header: "Produk Teratas", render: function (r) { return RtvUI.escapeHtml(r.produk_teratas); } },
+            ],
+            data.vendor,
+            "Belum ada data vendor pada periode ini."
+          ));
+
+          RtvUI.mount(tokoTableWrap, miniTable(
+            "Perbandingan Toko — diurutkan dari jumlah retur terbanyak",
+            [
+              { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.toko); } },
+              { header: "Jml RTV", render: function (r) { return r.jumlah; }, width: "70px" },
+              { header: "Nilai", render: function (r) { return rtvFormatCurrency(r.nilai); }, width: "110px" },
+              { header: "Pending", render: function (r) { return r.pending; }, width: "70px" },
+              { header: "% Ditolak", render: function (r) { return r.persen_ditolak + "%"; }, width: "80px" },
+            ],
+            data.toko,
+            "Belum ada data toko pada periode ini."
+          ));
+        })
+        .catch(rtvHandleError);
+    }
+
+    loadInsight(90);
   }
 
   // ======================================================================
@@ -213,7 +335,7 @@ var RtvAdmin = (function () {
     var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
     var card = RtvUI.el("div", { class: "rtv-card" }, [
       RtvUI.el("div", { class: "rtv-card-header" }, [
-        RtvUI.el("h3", {}, ["Verifikasi RTV (Received → Approved/Rejected)"]),
+        RtvUI.el("h3", {}, ["Verifikasi RTV (status Received)"]),
         reloadBtn,
       ]),
       tableWrap,
@@ -229,29 +351,31 @@ var RtvAdmin = (function () {
           var table = RtvUI.renderTableHtml({
             columns: [
               { header: "No. RTV", render: function (r) { return RtvUI.escapeHtml(r.no_rtv); }, width: "130px" },
-              { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.store_nama); }, width: "150px" },
+              { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.store_nama); }, width: "140px" },
               { header: "Produk", render: function (r) { return RtvUI.escapeHtml(r.product_nama); } },
-              { header: "Qty Ajuan", render: function (r) { return r.qty_diajukan; }, width: "90px" },
-              { header: "Qty Terima", render: function (r) { return r.qty_diterima; }, width: "90px" },
-              { header: "Kategori", render: function (r) { return RtvUI.escapeHtml(r.kategori_kerusakan); }, width: "130px" },
-              { header: "Batch", render: function (r) { return RtvUI.escapeHtml(r.batch || "-"); }, width: "100px" },
+              { header: "Qty Ajuan", render: function (r) { return r.qty_diajukan; }, width: "85px" },
+              { header: "Qty Terima", render: function (r) { return r.qty_diterima; }, width: "85px" },
+              { header: "Kategori", render: function (r) { return RtvUI.escapeHtml(r.kategori_kerusakan); }, width: "120px" },
+              { header: "Nilai Est.", render: function (r) { return rtvFormatCurrency(r.nilai_estimasi); }, width: "110px" },
               {
-                header: "Aksi", width: "250px",
+                header: "Aksi", width: "260px",
                 render: function (r) {
                   return "<button type='button' class='rtv-link-btn' data-action='setuju' data-id='" + r._id + "'>Setujui</button>" +
                     "<button type='button' class='rtv-link-btn danger' data-action='tolak' data-id='" + r._id + "'>Tolak</button>" +
-                    "<button type='button' class='rtv-link-btn' data-action='riwayat' data-id='" + r._id + "'>Riwayat</button>";
+                    "<button type='button' class='rtv-link-btn' data-action='foto' data-id='" + r._id + "'>Foto</button>" +
+                    "<button type='button' class='rtv-link-btn' data-action='cetak' data-id='" + r._id + "'>Cetak</button>";
                 },
               },
             ],
             rows: rows,
-            emptyText: "Tidak ada RTV menunggu verifikasi.",
+            emptyText: "Tidak ada RTV yang menunggu verifikasi.",
             onRowAction: function (action, id) {
               var row = rows.find(function (r) { return r._id === id; });
               if (!row) return;
               if (action === "setuju") verifikasi(row, true);
-              if (action === "tolak") verifikasi(row, false);
-              if (action === "riwayat") rtvOpenRiwayatModal(row._id, row.no_rtv);
+              if (action === "tolak") verifikasiTolak(row);
+              if (action === "foto") openFotoViewModal(row._id, row.no_rtv);
+              if (action === "cetak") RtvPrint.rtv(row._id);
             },
           });
           RtvUI.mount(tableWrap, table);
@@ -259,20 +383,67 @@ var RtvAdmin = (function () {
         .catch(rtvHandleError);
     }
 
-    function verifikasi(row, approve) {
+    function openFotoViewModal(rtvId, noRtv) {
+      var body = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+      RtvUI.openModal({ title: "Foto Bukti — " + (noRtv || ""), bodyNode: body });
+      RtvApi.get("/api/x/rtv/" + rtvId + "/foto")
+        .then(function (data) {
+          var items = data.items || [];
+          if (!items.length) {
+            RtvUI.mount(body, RtvUI.el("div", { class: "rtv-table-empty" }, ["Belum ada foto bukti untuk retur ini."]));
+            return;
+          }
+          var grid = RtvUI.el("div", { class: "rtv-photo-view-grid" });
+          items.forEach(function (f) {
+            grid.appendChild(RtvUI.el("img", { src: f.data, alt: "Foto bukti", onclick: function () { window.open(f.data, "_blank"); } }));
+          });
+          RtvUI.mount(body, grid);
+        })
+        .catch(function (err) { RtvUI.mount(body, RtvUI.el("div", { class: "rtv-field-error" }, [err.message])); });
+    }
+
+    function verifikasi(row, approve, catatan) {
       RtvUI.confirmDialog({
         title: approve ? "Setujui RTV" : "Tolak RTV",
         text: (approve ? "Setujui" : "Tolak") + " retur " + row.no_rtv + "?",
-        okText: "Ya",
+        okText: approve ? "Ya, Setujui" : "Ya, Tolak",
         danger: !approve,
       }).then(function (ok) {
         if (!ok) return;
-        RtvApi.post("/api/admin/verifikasi/" + row._id, { approve: approve })
+        RtvApi.post("/api/admin/verifikasi/" + row._id, { approve: approve, catatan: catatan || "" })
           .then(function () {
-            RtvUI.toast("RTV " + row.no_rtv + " berhasil di" + (approve ? "setujui." : "tolak."), "success");
+            RtvUI.toast("RTV " + row.no_rtv + " berhasil " + (approve ? "disetujui" : "ditolak") + ".", "success");
             loadVerifikasi();
           })
           .catch(rtvHandleError);
+      });
+    }
+
+    function verifikasiTolak(row) {
+      var catatanInput = RtvUI.el("textarea", { rows: "3", placeholder: "Contoh: foto tidak jelas, kondisi tidak sesuai klaim, dsb." });
+      var errorEl = RtvUI.el("div", { class: "rtv-field-error" });
+      var modal = RtvUI.openModal({
+        title: "Tolak Retur " + row.no_rtv,
+        bodyNode: RtvUI.el("div", {}, [
+          RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Alasan Penolakan (opsional, akan dikirim ke toko)"]), catatanInput]),
+          errorEl,
+        ]),
+        footer: [
+          { label: "Batal", variant: "ghost" },
+          {
+            label: "Tolak Retur", variant: "danger", closeOnClick: false,
+            onClick: function () {
+              RtvApi.post("/api/admin/verifikasi/" + row._id, { approve: false, catatan: catatanInput.value.trim() })
+                .then(function () {
+                  RtvUI.toast("RTV " + row.no_rtv + " ditolak.", "success");
+                  modal.close();
+                  loadVerifikasi();
+                })
+                .catch(function (err) { errorEl.textContent = err.message; });
+              return false;
+            },
+          },
+        ],
       });
     }
   }
@@ -284,6 +455,13 @@ var RtvAdmin = (function () {
     s.supplier_nama = s.supplier ? s.supplier.nama_supplier : "-";
     return s;
   }
+
+  var KLAIM_STATUS_OPTS = [
+    { id: "Diajukan", value: "Diajukan" },
+    { id: "Disetujui Penuh", value: "Disetujui Penuh" },
+    { id: "Disetujui Sebagian", value: "Disetujui Sebagian" },
+    { id: "Ditolak", value: "Ditolak" },
+  ];
 
   function renderSuratJalan(container) {
     var newBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-primary rtv-btn-sm", onclick: function () { openBuatSuratJalan(loadSuratJalan); } }, [
@@ -310,29 +488,31 @@ var RtvAdmin = (function () {
           var rows = (data.items || []).map(mapShipmentRow);
           var table = RtvUI.renderTableHtml({
             columns: [
-              { header: "No. Surat Jalan", render: function (r) { return RtvUI.escapeHtml(r.no_surat_jalan); }, width: "160px" },
-              { header: "Supplier", render: function (r) { return RtvUI.escapeHtml(r.supplier_nama); }, width: "190px" },
-              { header: "Jumlah Item", render: function (r) { return r.jumlah_item; }, width: "100px" },
-              { header: "Tgl Kirim", render: function (r) { return rtvFormatDate(r.tgl_kirim); }, width: "120px" },
-              { header: "Status", render: function (r) { return rtvStatusBadge(r.status_items); }, width: "170px" },
+              { header: "No. Surat Jalan", render: function (r) { return RtvUI.escapeHtml(r.no_surat_jalan); }, width: "150px" },
+              { header: "Supplier", render: function (r) { return RtvUI.escapeHtml(r.supplier_nama); }, width: "170px" },
+              { header: "Jml Item", render: function (r) { return r.jumlah_item; }, width: "75px" },
+              { header: "Nilai", render: function (r) { return rtvFormatCurrency(r.total_nilai); }, width: "110px" },
+              { header: "Tgl Kirim", render: function (r) { return rtvFormatDate(r.tgl_kirim); }, width: "110px" },
+              { header: "Status", render: function (r) { return rtvStatusBadge(r.status_items); }, width: "160px" },
               { header: "Hasil Klaim", render: function (r) { return RtvUI.escapeHtml(r.hasil_klaim || "-"); } },
               {
-                header: "Aksi", width: "150px",
+                header: "Aksi", width: "190px",
                 render: function (r) {
+                  var html = "<button type='button' class='rtv-link-btn' data-action='cetak' data-id='" + r._id + "'>Cetak</button>";
                   if (r.status_items === "Shipped to Supplier") {
-                    return "<button type='button' class='rtv-link-btn' data-action='selesai' data-id='" + r._id + "'>Selesaikan Klaim</button>";
+                    html += "<button type='button' class='rtv-link-btn' data-action='selesai' data-id='" + r._id + "'>Selesaikan Klaim</button>";
                   }
-                  return "";
+                  return html;
                 },
               },
             ],
             rows: rows,
             emptyText: "Belum ada surat jalan.",
             onRowAction: function (action, id) {
-              if (action === "selesai") {
-                var row = rows.find(function (r) { return r._id === id; });
-                if (row) openSelesaikanKlaim(row, loadSuratJalan);
-              }
+              var row = rows.find(function (r) { return r._id === id; });
+              if (!row) return;
+              if (action === "selesai") openSelesaikanKlaim(row, loadSuratJalan);
+              if (action === "cetak") RtvPrint.suratJalan(row._id);
             },
           });
           RtvUI.mount(tableWrap, table);
@@ -344,25 +524,20 @@ var RtvAdmin = (function () {
   function openBuatSuratJalan(onDone) {
     RtvApi.get("/api/admin/surat-jalan/items")
       .then(function (data) {
-        var suppliers = data.suppliers || [];
         var items = data.items || [];
-
+        var suppliers = data.suppliers || [];
         var supplierSelect = RtvUI.el("select", {}, [RtvUI.el("option", { value: "" }, ["Pilih supplier..."])].concat(
           suppliers.map(function (s) { return RtvUI.el("option", { value: s._id }, [s.nama_supplier + " (" + s.kode_supplier + ")"]); })
         ));
+        var itemsWrap = RtvUI.el("div", { class: "rtv-table-empty" }, ["Pilih supplier terlebih dahulu."]);
         var errorEl = RtvUI.el("div", { class: "rtv-field-error" });
-        var tableWrap = RtvUI.el("div", {}, [RtvUI.el("p", { class: "rtv-muted", style: { fontSize: "12.5px" } }, ["Pilih supplier untuk menampilkan item RTV berstatus Approved."])]);
-
-        var selectedIds = {};
 
         function renderItems(supplierId) {
-          errorEl.textContent = "";
-          selectedIds = {};
-          var filtered = items.filter(function (it) { return it.supplier_id === supplierId; });
-          if (!filtered.length) {
-            RtvUI.mount(tableWrap, RtvUI.el("div", { class: "rtv-table-empty" }, ["Tidak ada item Approved untuk supplier ini."]));
+          if (!supplierId) {
+            RtvUI.mount(itemsWrap, RtvUI.el("div", { class: "rtv-table-empty" }, ["Pilih supplier terlebih dahulu."]));
             return;
           }
+          var filtered = items.filter(function (it) { return it.supplier_id === supplierId; });
           var table = RtvUI.renderTableHtml({
             columns: [
               { header: "", render: function (r) { return "<input type='checkbox' data-check='" + r._id + "' />"; }, width: "40px" },
@@ -371,21 +546,16 @@ var RtvAdmin = (function () {
               { header: "Qty", render: function (r) { return r.qty_diterima; }, width: "70px" },
             ],
             rows: filtered,
+            emptyText: "Tidak ada item Approved dari supplier ini.",
           });
-          table.addEventListener("change", function (e) {
-            var cb = e.target.closest("[data-check]");
-            if (!cb) return;
-            var id = cb.getAttribute("data-check");
-            if (cb.checked) selectedIds[id] = true; else delete selectedIds[id];
-          });
-          RtvUI.mount(tableWrap, table);
+          RtvUI.mount(itemsWrap, table);
         }
 
         supplierSelect.addEventListener("change", function () { renderItems(supplierSelect.value); });
 
         var body = RtvUI.el("div", {}, [
-          RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Pilih Supplier"]), supplierSelect]),
-          tableWrap,
+          RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Supplier"]), supplierSelect]),
+          itemsWrap,
           errorEl,
         ]);
 
@@ -399,12 +569,12 @@ var RtvAdmin = (function () {
               label: "Buat Surat Jalan", variant: "primary", closeOnClick: false,
               onClick: function () {
                 errorEl.textContent = "";
-                var supplierId = supplierSelect.value;
-                if (!supplierId) { errorEl.textContent = "Pilih supplier terlebih dahulu."; return false; }
-                var ids = Object.keys(selectedIds);
-                if (!ids.length) { errorEl.textContent = "Pilih minimal satu item RTV Approved."; return false; }
+                if (!supplierSelect.value) { errorEl.textContent = "Pilih supplier terlebih dahulu."; return false; }
+                var checked = Array.prototype.slice.call(itemsWrap.querySelectorAll("[data-check]:checked"));
+                var rtvIds = checked.map(function (el) { return el.getAttribute("data-check"); });
+                if (!rtvIds.length) { errorEl.textContent = "Pilih minimal 1 item RTV."; return false; }
 
-                RtvApi.post("/api/admin/surat-jalan", { supplier_id: supplierId, rtv_ids: ids })
+                RtvApi.post("/api/admin/surat-jalan", { supplier_id: supplierSelect.value, rtv_ids: rtvIds })
                   .then(function (res) {
                     RtvUI.toast("Surat jalan " + res.shipment.no_surat_jalan + " berhasil dibuat.", "success");
                     modal.close();
@@ -421,12 +591,23 @@ var RtvAdmin = (function () {
   }
 
   function openSelesaikanKlaim(row, onDone) {
-    var textarea = RtvUI.el("textarea", { rows: "4", placeholder: "Tulis hasil klaim dari pabrik/supplier..." });
+    var statusSelect = RtvUI.el("select", {}, KLAIM_STATUS_OPTS.map(function (o) { return RtvUI.el("option", { value: o.id }, [o.value]); }));
+    statusSelect.value = "Disetujui Penuh";
+    var nilaiInput = RtvUI.el("input", { type: "number", min: "0", step: "1", placeholder: "Nilai kredit/penggantian dari supplier (Rp)" });
+    var ccnInput = RtvUI.el("input", { type: "text", placeholder: "Opsional" });
+    var hasilInput = RtvUI.el("textarea", { rows: "3", placeholder: "Ringkasan hasil klaim dari supplier..." });
     var errorEl = RtvUI.el("div", { class: "rtv-field-error" });
+
     var body = RtvUI.el("div", {}, [
-      RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Hasil Klaim dari Pabrik"]), textarea]),
+      RtvUI.el("div", { class: "rtv-form-grid" }, [
+        RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Status Klaim"]), statusSelect]),
+        RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Nilai Kredit Diterima (Rp)"]), nilaiInput]),
+        RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["No. Credit Note"]), ccnInput]),
+      ]),
+      RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Ringkasan Hasil Klaim"]), hasilInput]),
       errorEl,
     ]);
+
     var modal = RtvUI.openModal({
       title: "Selesaikan Klaim — " + row.no_surat_jalan,
       bodyNode: body,
@@ -435,11 +616,18 @@ var RtvAdmin = (function () {
         {
           label: "Simpan", variant: "primary", closeOnClick: false,
           onClick: function () {
-            var val = textarea.value.trim();
-            if (!val) { errorEl.textContent = "Hasil klaim wajib diisi."; return false; }
-            RtvApi.post("/api/admin/surat-jalan/" + row._id + "/selesai", { hasil_klaim: val })
+            errorEl.textContent = "";
+            if (!hasilInput.value.trim()) { errorEl.textContent = "Ringkasan hasil klaim wajib diisi."; return false; }
+            var payload = {
+              hasil_klaim: hasilInput.value.trim(),
+              klaim_status: statusSelect.value,
+              no_credit_note: ccnInput.value.trim(),
+            };
+            if (nilaiInput.value !== "") payload.nilai_kredit = Number(nilaiInput.value);
+
+            RtvApi.post("/api/admin/surat-jalan/" + row._id + "/selesai", payload)
               .then(function () {
-                RtvUI.toast("Klaim " + row.no_surat_jalan + " selesai (status Completed).", "success");
+                RtvUI.toast("Klaim untuk " + row.no_surat_jalan + " berhasil diselesaikan.", "success");
                 modal.close();
                 if (onDone) onDone();
               })
@@ -452,7 +640,7 @@ var RtvAdmin = (function () {
   }
 
   // ======================================================================
-  // Master Data (Supplier / Produk / Toko / Shift)
+  // Master Data
   // ======================================================================
   var MASTER_DEFS = {
     supplier: {
@@ -478,8 +666,6 @@ var RtvAdmin = (function () {
         { header: "Barcode", render: function (r) { return RtvUI.escapeHtml(r.barcode); }, width: "130px" },
         { header: "Nama Produk", render: function (r) { return RtvUI.escapeHtml(r.nama_produk); } },
         { header: "Harga", render: function (r) { return rtvFormatCurrency(r.harga); }, width: "110px" },
-        { header: "Supplier", render: function (r) { return RtvUI.escapeHtml(r.supplier_nama || "-"); }, width: "160px" },
-        { header: "Aktif", render: function (r) { return r.aktif ? "Ya" : "Tidak"; }, width: "70px" },
       ],
       fields: function (supplierOpts) {
         return [
@@ -648,75 +834,175 @@ var RtvAdmin = (function () {
   }
 
   // ======================================================================
-  // Karyawan
+  // Karyawan (termasuk persetujuan akun pendaftaran mandiri)
   // ======================================================================
   function renderKaryawan(container) {
-    var addBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-primary rtv-btn-sm", onclick: function () { openKaryawanForm(null); } }, [
-      RtvUI.el("i", { class: "fa-solid fa-user-plus" }), " Tambah Karyawan",
-    ]);
-    var reloadBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-ghost rtv-btn-sm", onclick: function () { loadKaryawan(); } }, [
-      RtvUI.el("i", { class: "fa-solid fa-rotate-right" }), " Muat Ulang",
-    ]);
-    var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+    var tabsEl = RtvUI.el("div", { class: "rtv-tabs" });
+    var panelWrap = RtvUI.el("div");
+
+    var tabAktif = RtvUI.el("div", { class: "rtv-tab active" }, ["Karyawan Aktif"]);
+    var tabMenunggu = RtvUI.el("div", { class: "rtv-tab" }, ["Menunggu Persetujuan"]);
+    tabsEl.appendChild(tabAktif);
+    tabsEl.appendChild(tabMenunggu);
+
+    var aktifPanel = buildAktifPanel();
+    var menungguPanel = buildMenungguPanel();
+
+    function selectTab(name) {
+      tabAktif.classList.toggle("active", name === "aktif");
+      tabMenunggu.classList.toggle("active", name === "menunggu");
+      if (name === "aktif") { RtvUI.mount(panelWrap, aktifPanel.panel); aktifPanel.load(); }
+      else { RtvUI.mount(panelWrap, menungguPanel.panel); menungguPanel.load(); }
+    }
+    tabAktif.addEventListener("click", function () { selectTab("aktif"); });
+    tabMenunggu.addEventListener("click", function () { selectTab("menunggu"); });
+
     var card = RtvUI.el("div", { class: "rtv-card" }, [
-      RtvUI.el("div", { class: "rtv-card-header" }, [
-        RtvUI.el("h3", {}, ["Kelola Karyawan"]),
-        RtvUI.el("div", { class: "rtv-card-toolbar" }, [addBtn, reloadBtn]),
-      ]),
-      tableWrap,
+      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Kelola Karyawan"])]),
+      tabsEl,
+      panelWrap,
     ]);
     RtvUI.mount(container, card);
-    loadKaryawan();
+    selectTab("aktif");
 
-    function loadKaryawan() {
-      RtvUI.mount(tableWrap, RtvUI.pageLoading());
-      RtvApi.get("/api/karyawan")
-        .then(function (data) {
-          var rows = data.items || [];
-          var table = RtvUI.renderTableHtml({
-            columns: [
-              { header: "NIK", render: function (r) { return RtvUI.escapeHtml(r.nik); }, width: "100px" },
-              { header: "Nama", render: function (r) { return RtvUI.escapeHtml(r.nama); }, width: "170px" },
-              { header: "Username", render: function (r) { return RtvUI.escapeHtml(r.username); }, width: "130px" },
-              { header: "Role", render: function (r) { return RTV_ROLE_LABEL[r.role] || r.role; }, width: "140px" },
-              { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.store_nama || "-"); }, width: "150px" },
-              {
-                header: "Status", width: "90px",
-                render: function (r) { return r.aktif ? "<span style='color:var(--rtv-green);font-weight:600;'>Aktif</span>" : "<span style='color:var(--rtv-red);font-weight:600;'>Nonaktif</span>"; },
-              },
-              {
-                header: "Aksi", width: "230px",
-                render: function (r) {
-                  var html = "<button type='button' class='rtv-link-btn' data-action='edit' data-id='" + r._id + "'>Ubah</button>";
-                  html += "<button type='button' class='rtv-link-btn' data-action='pindah' data-id='" + r._id + "'>Pindahkan</button>";
-                  html += r.aktif
-                    ? "<button type='button' class='rtv-link-btn danger' data-action='nonaktifkan' data-id='" + r._id + "'>Nonaktifkan</button>"
-                    : "<button type='button' class='rtv-link-btn' data-action='aktifkan' data-id='" + r._id + "'>Aktifkan</button>";
-                  return html;
+    function refreshBadge() {
+      RtvApi.get("/api/karyawan/menunggu").then(function (data) {
+        var n = (data.items || []).length;
+        tabMenunggu.textContent = "Menunggu Persetujuan" + (n ? " (" + n + ")" : "");
+      }).catch(function () {});
+    }
+    refreshBadge();
+
+    function buildAktifPanel() {
+      var addBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-primary rtv-btn-sm", onclick: function () { openKaryawanForm(null); } }, [
+        RtvUI.el("i", { class: "fa-solid fa-user-plus" }), " Tambah Karyawan",
+      ]);
+      var reloadBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-ghost rtv-btn-sm", onclick: function () { load(); } }, [
+        RtvUI.el("i", { class: "fa-solid fa-rotate-right" }), " Muat Ulang",
+      ]);
+      var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+      var panel = RtvUI.el("div", {}, [
+        RtvUI.el("div", { class: "rtv-card-toolbar", style: { marginBottom: "14px", justifyContent: "flex-end" } }, [addBtn, reloadBtn]),
+        tableWrap,
+      ]);
+
+      function load() {
+        RtvUI.mount(tableWrap, RtvUI.pageLoading());
+        RtvApi.get("/api/karyawan")
+          .then(function (data) {
+            var rows = data.items || [];
+            var table = RtvUI.renderTableHtml({
+              columns: [
+                { header: "NIK", render: function (r) { return RtvUI.escapeHtml(r.nik); }, width: "100px" },
+                { header: "Nama", render: function (r) { return RtvUI.escapeHtml(r.nama); }, width: "160px" },
+                { header: "Username", render: function (r) { return RtvUI.escapeHtml(r.username); }, width: "120px" },
+                { header: "Role", render: function (r) { return RTV_ROLE_LABEL[r.role] || r.role; }, width: "130px" },
+                { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.store_nama || "-"); }, width: "140px" },
+                {
+                  header: "Status", width: "90px",
+                  render: function (r) { return r.aktif ? "<span style='color:var(--rtv-green);font-weight:600;'>Aktif</span>" : "<span style='color:var(--rtv-red);font-weight:600;'>Nonaktif</span>"; },
                 },
+                {
+                  header: "Aksi", width: "230px",
+                  render: function (r) {
+                    var html = "<button type='button' class='rtv-link-btn' data-action='edit' data-id='" + r._id + "'>Ubah</button>";
+                    html += "<button type='button' class='rtv-link-btn' data-action='pindah' data-id='" + r._id + "'>Pindahkan</button>";
+                    html += r.aktif
+                      ? "<button type='button' class='rtv-link-btn danger' data-action='nonaktifkan' data-id='" + r._id + "'>Nonaktifkan</button>"
+                      : "<button type='button' class='rtv-link-btn' data-action='aktifkan' data-id='" + r._id + "'>Aktifkan</button>";
+                    return html;
+                  },
+                },
+              ],
+              rows: rows,
+              emptyText: "Belum ada data karyawan.",
+              onRowAction: function (action, id) {
+                var row = rows.find(function (r) { return r._id === id; });
+                if (!row) return;
+                if (action === "edit") openKaryawanForm(row);
+                else if (action === "pindah") openPindahForm(row, load);
+                else if (action === "nonaktifkan" || action === "aktifkan") aksiKaryawan(row, action, load);
               },
-            ],
-            rows: rows,
-            emptyText: "Belum ada data karyawan.",
-            onRowAction: function (action, id) {
-              var row = rows.find(function (r) { return r._id === id; });
-              if (!row) return;
-              if (action === "edit") openKaryawanForm(row);
-              else if (action === "pindah") openPindahForm(row, loadKaryawan);
-              else if (action === "nonaktifkan" || action === "aktifkan") aksiKaryawan(row, action);
-            },
-          });
-          RtvUI.mount(tableWrap, table);
-        })
-        .catch(rtvHandleError);
+            });
+            RtvUI.mount(tableWrap, table);
+          })
+          .catch(rtvHandleError);
+      }
+
+      return { panel: panel, load: load };
     }
 
-    function aksiKaryawan(row, action) {
+    function buildMenungguPanel() {
+      var reloadBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-ghost rtv-btn-sm", onclick: function () { load(); } }, [
+        RtvUI.el("i", { class: "fa-solid fa-rotate-right" }), " Muat Ulang",
+      ]);
+      var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+      var panel = RtvUI.el("div", {}, [
+        RtvUI.el("div", { class: "rtv-card-toolbar", style: { marginBottom: "14px", justifyContent: "flex-end" } }, [reloadBtn]),
+        RtvUI.el("p", { class: "rtv-muted", style: { fontSize: "12.5px", marginTop: 0 } }, [
+          "Akun hasil pendaftaran mandiri dari halaman masuk. Setujui untuk mengaktifkan, atau tolak untuk menghapusnya.",
+        ]),
+        tableWrap,
+      ]);
+
+      function load() {
+        RtvUI.mount(tableWrap, RtvUI.pageLoading());
+        RtvApi.get("/api/karyawan/menunggu")
+          .then(function (data) {
+            var rows = data.items || [];
+            var table = RtvUI.renderTableHtml({
+              columns: [
+                { header: "NIK", render: function (r) { return RtvUI.escapeHtml(r.nik); }, width: "100px" },
+                { header: "Nama", render: function (r) { return RtvUI.escapeHtml(r.nama); }, width: "170px" },
+                { header: "Username", render: function (r) { return RtvUI.escapeHtml(r.username); }, width: "130px" },
+                { header: "Role", render: function (r) { return RTV_ROLE_LABEL[r.role] || r.role; }, width: "130px" },
+                { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.store_nama || "-"); }, width: "150px" },
+                { header: "Tgl Daftar", render: function (r) { return rtvFormatDate(r.tgl_mulai_penempatan); }, width: "120px" },
+                {
+                  header: "Aksi", width: "160px",
+                  render: function (r) {
+                    return "<button type='button' class='rtv-link-btn' data-action='setujui' data-id='" + r._id + "'>Setujui</button>" +
+                      "<button type='button' class='rtv-link-btn danger' data-action='tolak' data-id='" + r._id + "'>Tolak</button>";
+                  },
+                },
+              ],
+              rows: rows,
+              emptyText: "Tidak ada akun yang menunggu persetujuan.",
+              onRowAction: function (action, id) {
+                var row = rows.find(function (r) { return r._id === id; });
+                if (!row) return;
+                var isSetujui = action === "setujui";
+                RtvUI.confirmDialog({
+                  title: isSetujui ? "Setujui Pendaftaran" : "Tolak Pendaftaran",
+                  text: (isSetujui ? "Setujui" : "Tolak") + " pendaftaran " + row.nama + " (" + row.username + ")?",
+                  okText: isSetujui ? "Ya, Setujui" : "Ya, Tolak",
+                  danger: !isSetujui,
+                }).then(function (ok) {
+                  if (!ok) return;
+                  RtvApi.post("/api/karyawan/" + row._id + "/" + action)
+                    .then(function () {
+                      RtvUI.toast("Pendaftaran " + row.username + " berhasil " + (isSetujui ? "disetujui" : "ditolak") + ".", "success");
+                      load();
+                      refreshBadge();
+                    })
+                    .catch(rtvHandleError);
+                });
+              },
+            });
+            RtvUI.mount(tableWrap, table);
+          })
+          .catch(rtvHandleError);
+      }
+
+      return { panel: panel, load: load };
+    }
+
+    function aksiKaryawan(row, action, onDone) {
       var label = action === "nonaktifkan" ? "menonaktifkan" : "mengaktifkan";
       RtvUI.confirmDialog({ title: "Konfirmasi", text: "Yakin ingin " + label + " " + row.nama + "?" }).then(function (ok) {
         if (!ok) return;
         RtvApi.post("/api/karyawan/" + row._id + "/" + action)
-          .then(function () { RtvUI.toast("Berhasil " + label + " karyawan.", "success"); loadKaryawan(); })
+          .then(function () { RtvUI.toast("Berhasil " + label + " karyawan.", "success"); if (onDone) onDone(); })
           .catch(rtvHandleError);
       });
     }
@@ -735,6 +1021,7 @@ var RtvAdmin = (function () {
           { name: "nik", label: "NIK", disabled: !!existing },
           { name: "nama", label: "Nama" },
           { name: "username", label: "Username", disabled: !!existing },
+          { name: "email", label: "Email (opsional)", type: "email" },
           { name: "password", label: existing ? "Password (kosongkan jika tidak diubah)" : "Password", type: "password" },
           { name: "role", label: "Role", type: "select", options: roleOpts },
           { name: "store_id", label: "Toko", type: "select", options: storeOpts, disabled: !!existing },
@@ -755,14 +1042,14 @@ var RtvAdmin = (function () {
                 errorEl.textContent = "";
                 var values = formBuilder.getValues();
                 if (existing) {
-                  var payload = { nama: values.nama, role: values.role, shift_id: values.shift_id || null };
+                  var payload = { nama: values.nama, email: values.email, role: values.role, shift_id: values.shift_id || null };
                   if (values.password) payload.password = values.password;
                   RtvApi.put("/api/karyawan/" + existing._id, payload)
-                    .then(function () { RtvUI.toast("Data karyawan diperbarui.", "success"); modal.close(); loadKaryawan(); })
+                    .then(function () { RtvUI.toast("Data karyawan diperbarui.", "success"); modal.close(); aktifPanel.load(); })
                     .catch(function (err) { errorEl.textContent = err.message; });
                 } else {
                   RtvApi.post("/api/karyawan", values)
-                    .then(function () { RtvUI.toast("Karyawan baru berhasil ditambahkan.", "success"); modal.close(); loadKaryawan(); })
+                    .then(function () { RtvUI.toast("Karyawan baru berhasil ditambahkan.", "success"); modal.close(); aktifPanel.load(); })
                     .catch(function (err) { errorEl.textContent = err.message; });
                 }
                 return false;
@@ -802,34 +1089,189 @@ var RtvAdmin = (function () {
   }
 
   // ======================================================================
-  // Laporan
+  // Laporan: Rekap Supplier, Log Aktivitas, Ekspor Data RTV
   // ======================================================================
   function renderLaporan(container) {
-    var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+    var tabsEl = RtvUI.el("div", { class: "rtv-tabs" });
+    var panelWrap = RtvUI.el("div");
+    var tabs = [
+      { id: "rekap", label: "Rekap Klaim per Supplier" },
+      { id: "audit", label: "Log Aktivitas" },
+      { id: "export", label: "Ekspor Data RTV" },
+    ];
+    var tabEls = {};
+    var panels = { rekap: buildRekapPanel(), audit: buildAuditPanel(), export: buildExportPanel() };
+
+    tabs.forEach(function (t, idx) {
+      var el = RtvUI.el("div", { class: "rtv-tab" + (idx === 0 ? " active" : "") }, [t.label]);
+      el.addEventListener("click", function () { selectTab(t.id); });
+      tabEls[t.id] = el;
+      tabsEl.appendChild(el);
+    });
+
+    function selectTab(id) {
+      Object.keys(tabEls).forEach(function (k) { tabEls[k].classList.toggle("active", k === id); });
+      RtvUI.mount(panelWrap, panels[id].panel);
+      panels[id].load();
+    }
+
     var card = RtvUI.el("div", { class: "rtv-card" }, [
-      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Laporan Rekapitulasi Klaim per Supplier"])]),
-      tableWrap,
+      RtvUI.el("div", { class: "rtv-card-header" }, [RtvUI.el("h3", {}, ["Laporan & Log Aktivitas"])]),
+      tabsEl,
+      panelWrap,
     ]);
     RtvUI.mount(container, card);
+    selectTab("rekap");
 
-    RtvApi.get("/api/dashboard/rekap-supplier")
-      .then(function (data) {
-        var rows = data.items || [];
-        var table = RtvUI.renderTableHtml({
-          columns: [
-            { header: "No. Surat Jalan", render: function (r) { return RtvUI.escapeHtml(r.no_surat_jalan); }, width: "170px" },
-            { header: "Supplier", render: function (r) { return RtvUI.escapeHtml(r.supplier_nama || "-"); }, width: "190px" },
-            { header: "Jumlah Item", render: function (r) { return r.jumlah_item; }, width: "100px" },
-            { header: "Tgl Kirim", render: function (r) { return rtvFormatDate(r.tgl_kirim); }, width: "120px" },
-            { header: "Tgl Selesai", render: function (r) { return rtvFormatDate(r.tgl_selesai); }, width: "120px" },
-            { header: "Hasil Klaim", render: function (r) { return RtvUI.escapeHtml(r.hasil_klaim || "-"); } },
-          ],
-          rows: rows,
-          emptyText: "Belum ada data klaim.",
+    function buildRekapPanel() {
+      var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+      var panel = RtvUI.el("div", {}, [tableWrap]);
+      function load() {
+        RtvUI.mount(tableWrap, RtvUI.pageLoading());
+        RtvApi.get("/api/dashboard/rekap-supplier")
+          .then(function (data) {
+            var rows = data.items || [];
+            var table = RtvUI.renderTableHtml({
+              columns: [
+                { header: "No. Surat Jalan", render: function (r) { return RtvUI.escapeHtml(r.no_surat_jalan); }, width: "160px" },
+                { header: "Supplier", render: function (r) { return RtvUI.escapeHtml(r.supplier_nama || "-"); }, width: "180px" },
+                { header: "Jumlah Item", render: function (r) { return r.jumlah_item; }, width: "95px" },
+                { header: "Tgl Kirim", render: function (r) { return rtvFormatDate(r.tgl_kirim); }, width: "115px" },
+                { header: "Tgl Selesai", render: function (r) { return rtvFormatDate(r.tgl_selesai); }, width: "115px" },
+                { header: "Hasil Klaim", render: function (r) { return RtvUI.escapeHtml(r.hasil_klaim || "-"); } },
+              ],
+              rows: rows,
+              emptyText: "Belum ada data klaim.",
+            });
+            RtvUI.mount(tableWrap, table);
+          })
+          .catch(rtvHandleError);
+      }
+      return { panel: panel, load: load };
+    }
+
+    function buildAuditPanel() {
+      var koleksiSelect = RtvUI.el("select", {}, [
+        RtvUI.el("option", { value: "" }, ["Semua koleksi"]),
+        RtvUI.el("option", { value: "rtv_transactions" }, ["Transaksi RTV"]),
+        RtvUI.el("option", { value: "rtv_shipments" }, ["Surat Jalan"]),
+        RtvUI.el("option", { value: "master_karyawan" }, ["Karyawan"]),
+      ]);
+      koleksiSelect.addEventListener("change", function () { load(); });
+      var reloadBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-ghost rtv-btn-sm", onclick: function () { load(); } }, [
+        RtvUI.el("i", { class: "fa-solid fa-rotate-right" }), " Muat Ulang",
+      ]);
+      var tableWrap = RtvUI.el("div", {}, [RtvUI.pageLoading()]);
+      var panel = RtvUI.el("div", {}, [
+        RtvUI.el("div", { class: "rtv-card-toolbar", style: { marginBottom: "14px" } }, [koleksiSelect, reloadBtn]),
+        tableWrap,
+      ]);
+
+      function load() {
+        RtvUI.mount(tableWrap, RtvUI.pageLoading());
+        var url = "/api/x/audit" + (koleksiSelect.value ? "?koleksi=" + encodeURIComponent(koleksiSelect.value) : "");
+        RtvApi.get(url)
+          .then(function (data) {
+            var table = RtvUI.renderTableHtml({
+              columns: [
+                { header: "Waktu", render: function (r) { return rtvFormatDateTime(r.tgl); }, width: "150px" },
+                { header: "Koleksi", render: function (r) { return RtvUI.escapeHtml(r.koleksi); }, width: "140px" },
+                { header: "Aksi", render: function (r) { return RtvUI.escapeHtml(r.aksi); }, width: "160px" },
+                { header: "Referensi", render: function (r) { return RtvUI.escapeHtml(r.ref); }, width: "150px" },
+                { header: "Oleh", render: function (r) { return RtvUI.escapeHtml(r.oleh); } },
+              ],
+              rows: data.items || [],
+              emptyText: "Belum ada log aktivitas.",
+            });
+            RtvUI.mount(tableWrap, table);
+          })
+          .catch(rtvHandleError);
+      }
+      return { panel: panel, load: load };
+    }
+
+    function buildExportPanel() {
+      var dariInput = RtvUI.el("input", { type: "date" });
+      var sampaiInput = RtvUI.el("input", { type: "date" });
+      var statusSelect = RtvUI.el("select", {}, ["", "Pending", "Received", "Approved", "Rejected", "Shipped to Supplier", "Completed", "Cancelled"].map(function (s) {
+        return RtvUI.el("option", { value: s }, [s || "Semua Status"]);
+      }));
+      var previewWrap = RtvUI.el("div", {}, [RtvUI.el("div", { class: "rtv-table-empty" }, ["Klik \"Tampilkan\" untuk melihat pratinjau data."])]);
+      var exportBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-primary rtv-btn-sm" }, [
+        RtvUI.el("i", { class: "fa-solid fa-file-csv" }), " Ekspor ke CSV",
+      ]);
+      var previewBtn = RtvUI.el("button", { type: "button", class: "rtv-btn rtv-btn-ghost rtv-btn-sm" }, ["Tampilkan"]);
+
+      var panel = RtvUI.el("div", {}, [
+        RtvUI.el("div", { class: "rtv-form-grid" }, [
+          RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Dari Tanggal"]), dariInput]),
+          RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Sampai Tanggal"]), sampaiInput]),
+          RtvUI.el("div", { class: "rtv-field" }, [RtvUI.el("label", {}, ["Status"]), statusSelect]),
+        ]),
+        RtvUI.el("div", { class: "rtv-form-actions" }, [previewBtn, exportBtn]),
+        previewWrap,
+      ]);
+
+      var lastRows = [];
+      var COLS = [
+        { header: "No. RTV", key: "no_rtv" },
+        { header: "Toko", key: "toko" },
+        { header: "Supplier", key: "supplier" },
+        { header: "Barcode", key: "barcode" },
+        { header: "Produk", key: "produk" },
+        { header: "Qty Diajukan", key: "qty_diajukan" },
+        { header: "Qty Diterima", key: "qty_diterima" },
+        { header: "Harga", key: "harga" },
+        { header: "Nilai", key: "nilai" },
+        { header: "Status", key: "status" },
+        { header: "Kategori", key: "kategori" },
+        { header: "Batch", key: "batch" },
+        { header: "No. Surat Jalan", key: "surat_jalan" },
+        { header: "Tgl Diajukan", key: "tgl_input" },
+      ];
+
+      function fetchRows() {
+        var params = [];
+        if (dariInput.value) params.push("dari=" + dariInput.value);
+        if (sampaiInput.value) params.push("sampai=" + sampaiInput.value);
+        if (statusSelect.value) params.push("status=" + encodeURIComponent(statusSelect.value));
+        return RtvApi.get("/api/x/rtv-export" + (params.length ? "?" + params.join("&") : "")).then(function (data) {
+          lastRows = data.items || [];
+          return lastRows;
         });
-        RtvUI.mount(tableWrap, table);
-      })
-      .catch(rtvHandleError);
+      }
+
+      previewBtn.addEventListener("click", function () {
+        RtvUI.mount(previewWrap, RtvUI.pageLoading());
+        fetchRows().then(function (rows) {
+          var table = RtvUI.renderTableHtml({
+            columns: [
+              { header: "No. RTV", render: function (r) { return RtvUI.escapeHtml(r.no_rtv); }, width: "130px" },
+              { header: "Toko", render: function (r) { return RtvUI.escapeHtml(r.toko); }, width: "130px" },
+              { header: "Produk", render: function (r) { return RtvUI.escapeHtml(r.produk); } },
+              { header: "Status", render: function (r) { return rtvStatusBadge(r.status); }, width: "150px" },
+              { header: "Nilai", render: function (r) { return rtvFormatCurrency(r.nilai); }, width: "120px" },
+            ],
+            rows: rows.slice(0, 50),
+            emptyText: "Tidak ada data untuk filter ini.",
+          });
+          RtvUI.mount(previewWrap, RtvUI.el("div", {}, [
+            RtvUI.el("p", { class: "rtv-muted", style: { fontSize: "12.5px" } }, [
+              "Menampilkan " + Math.min(rows.length, 50) + " dari " + rows.length + " baris. Gunakan \"Ekspor ke CSV\" untuk mengunduh semuanya.",
+            ]),
+            table,
+          ]));
+        }).catch(rtvHandleError);
+      });
+
+      exportBtn.addEventListener("click", function () {
+        fetchRows().then(function (rows) {
+          RtvUx.exportCsv("data-rtv.csv", rows, COLS);
+        }).catch(rtvHandleError);
+      });
+
+      return { panel: panel, load: function () {} };
+    }
   }
 
   return {

@@ -1,5 +1,6 @@
 """
-Autentikasi: login, logout, dan info sesi (/api/auth/*).
+Autentikasi: login, logout, info sesi, daftar akun baru, dan lupa password
+(/api/auth/*).
 
 Mengikuti sequence diagram "Autentikasi dan otorisasi":
 1. Client POST /login (username, password)
@@ -7,11 +8,15 @@ Mengikuti sequence diagram "Autentikasi dan otorisasi":
 3. Jika benar & akun aktif -> simpan session, kembalikan menu sesuai role
 4. Jika salah / nonaktif -> tolak dengan pesan generik (tidak membocorkan
    apakah username ada atau tidak, demi keamanan)
+
+Percobaan login yang gagal berulang kali dari kombinasi username+IP yang
+sama akan dibatasi sementara (lihat app/blueprints/extras.py::throttle_*),
+supaya aplikasi ini aman dipakai di internet publik.
 """
 import datetime
 import os
 
-from flask import Blueprint, jsonify, request, session
+from flask import Blueprint, g, jsonify, request, session
 from pymongo.errors import DuplicateKeyError
 
 from ..db import get_db
@@ -24,8 +29,12 @@ from ..utils import (
     sanitize_username,
     to_object_id,
 )
+from .extras import client_ip, notify, throttle_check, throttle_clear, throttle_fail
 
 bp = Blueprint("auth", __name__)
+
+# Role yang boleh dipilih lewat pendaftaran mandiri. "admin" TIDAK boleh.
+_SELF_REGISTER_ROLES = ("staff_toko", "staff_gudang")
 
 
 def _serialize_session_user(doc):
@@ -35,6 +44,7 @@ def _serialize_session_user(doc):
         "nama": doc.get("nama"),
         "username": doc.get("username"),
         "role": doc.get("role"),
+        "email": doc.get("email"),
         "store_id": str(doc["store_id"]) if doc.get("store_id") else None,
         "shift_id": str(doc["shift_id"]) if doc.get("shift_id") else None,
     }
@@ -49,31 +59,43 @@ def login():
     if not raw_username or not raw_password:
         raise ApiError("Username dan password wajib diisi.", code="validation_error")
 
+    db = get_db()
+    throttle_key = "login:" + client_ip() + ":" + str(raw_username).strip().lower()[:40]
+    throttle_check(db, throttle_key)
+
+    generic_fail = ApiError(
+        "Username atau password salah, atau akun nonaktif.",
+        status_code=401,
+        code="invalid_credentials",
+    )
+
     try:
         username = sanitize_username(raw_username)
     except ApiError:
         # Format username tidak valid -> tetap balas pesan generik gagal login
-        raise ApiError("Username atau password salah, atau akun nonaktif.", status_code=401, code="invalid_credentials")
+        throttle_fail(db, throttle_key)
+        raise generic_fail
 
     if len(raw_password) > 256:
         raise ApiError("Password terlalu panjang.", code="validation_error")
 
-    db = get_db()
     user = db.master_karyawan.find_one({"username": username})
 
     if not user or not verify_password(raw_password, user.get("password_hash", "")):
-        raise ApiError(
-            "Username atau password salah, atau akun nonaktif.",
-            status_code=401,
-            code="invalid_credentials",
-        )
+        throttle_fail(db, throttle_key)
+        raise generic_fail
 
     if not user.get("aktif", False):
-        raise ApiError(
-            "Username atau password salah, atau akun nonaktif.",
-            status_code=401,
-            code="invalid_credentials",
-        )
+        throttle_fail(db, throttle_key)
+        if user.get("menunggu_persetujuan"):
+            raise ApiError(
+                "Akun Anda masih menunggu persetujuan admin. Silakan coba lagi nanti.",
+                status_code=401,
+                code="pending_approval",
+            )
+        raise generic_fail
+
+    throttle_clear(db, throttle_key)
 
     session.clear()
     session.permanent = True
@@ -87,8 +109,6 @@ def login():
 @bp.post("/logout")
 @login_required
 def logout():
-    from flask import g
-
     record_audit("master_karyawan", g.user["_id"], "logout")
     session.clear()
     return jsonify({"ok": True})
@@ -97,8 +117,6 @@ def logout():
 @bp.get("/me")
 @login_required
 def me():
-    from flask import g
-
     db = get_db()
     store = None
     if g.user.get("store_id"):
@@ -112,14 +130,10 @@ def me():
 # ===========================================================================
 # DAFTAR AKUN BARU & LUPA PASSWORD (endpoint publik, tanpa login)
 # ===========================================================================
-
-# Role yang boleh dipilih lewat pendaftaran mandiri. "admin" TIDAK boleh.
-_SELF_REGISTER_ROLES = ("staff_toko", "staff_gudang")
-
-
 def _auto_activate():
-    # Default 0 = akun baru harus diaktifkan admin (menu Karyawan -> Aktifkan).
-    # Set REGISTER_AUTO_ACTIVE=1 di environment jika akun boleh langsung aktif.
+    # Default 0 = akun baru harus disetujui admin dulu (menu Karyawan ->
+    # tab "Menunggu Persetujuan"). Set REGISTER_AUTO_ACTIVE=1 di environment
+    # variable kalau akun pendaftaran mandiri boleh langsung aktif.
     return os.environ.get("REGISTER_AUTO_ACTIVE", "0") == "1"
 
 
@@ -174,19 +188,27 @@ def register():
         if not db.master_shift.find_one({"_id": shift_id}):
             raise ApiError("Shift tidak ditemukan.", status_code=404, code="not_found")
 
-    aktif = _auto_activate()
+    email = None
+    if data.get("email"):
+        email = sanitize_str(data["email"], max_len=150, field="Email", required=False)
+
+    auto = _auto_activate()
+    now = datetime.datetime.utcnow()
     doc = {
         "nik": nik,
         "nama": sanitize_str(data["nama"], max_len=150, field="Nama"),
         "username": username,
+        "email": email,
         "password_hash": hash_password(data["password"]),
         "role": role,
         "store_id": store_id,
         "shift_id": shift_id,
-        "aktif": aktif,
-        "tgl_nonaktif": None if aktif else datetime.datetime.utcnow(),
-        "tgl_mulai_penempatan": datetime.datetime.utcnow(),
+        "aktif": auto,
+        "menunggu_persetujuan": not auto,
+        "tgl_nonaktif": None,
+        "tgl_mulai_penempatan": now,
         "riwayat_penempatan": [],
+        "notif_seen_at": now,
     }
     try:
         result = db.master_karyawan.insert_one(doc)
@@ -197,11 +219,17 @@ def register():
     safe_doc["_id"] = result.inserted_id
     record_audit("master_karyawan", result.inserted_id, "daftar_mandiri", after=jsonable(safe_doc))
 
-    if aktif:
+    if auto:
         message = "Pendaftaran berhasil. Silakan masuk dengan akun Anda."
     else:
         message = "Pendaftaran berhasil. Akun Anda menunggu persetujuan admin sebelum bisa dipakai masuk."
-    return jsonify({"ok": True, "aktif": aktif, "message": message}), 201
+        notify(
+            db, "admin",
+            "Akun baru menunggu persetujuan",
+            "%s (%s) mendaftar sebagai %s." % (doc["nama"], username, role),
+            link="admin-karyawan",
+        )
+    return jsonify({"ok": True, "aktif": auto, "message": message}), 201
 
 
 @bp.post("/reset-password")
@@ -209,10 +237,16 @@ def reset_password():
     """
     Lupa password tanpa email: verifikasi username + NIK, lalu set password baru.
     Akun admin tidak bisa direset lewat sini (reset oleh admin lain di menu Karyawan).
-    Pesan gagal dibuat generik supaya tidak membocorkan data akun.
+    Pesan gagal dibuat generik supaya tidak membocorkan data akun, dan dibatasi
+    percobaannya sama seperti login supaya tidak dipakai untuk menebak NIK.
     """
     data = request.get_json(silent=True) or {}
     require_fields(data, ["username", "nik", "new_password"])
+
+    db = get_db()
+    throttle_key = "reset:" + client_ip() + ":" + str(data.get("username", "")).strip().lower()[:40]
+    throttle_check(db, throttle_key)
+
     generic_fail = ApiError(
         "Username dan NIK tidak cocok, atau akun tidak bisa direset mandiri.",
         status_code=400,
@@ -225,13 +259,15 @@ def reset_password():
         username = sanitize_username(data["username"])
         nik = sanitize_str(data["nik"], max_len=32, field="NIK")
     except ApiError:
+        throttle_fail(db, throttle_key)
         raise generic_fail
 
-    db = get_db()
     user = db.master_karyawan.find_one({"username": username, "nik": nik})
     if not user or not user.get("aktif", False) or user.get("role") == "admin":
+        throttle_fail(db, throttle_key)
         raise generic_fail
 
+    throttle_clear(db, throttle_key)
     db.master_karyawan.update_one(
         {"_id": user["_id"]},
         {"$set": {"password_hash": hash_password(data["new_password"])}},

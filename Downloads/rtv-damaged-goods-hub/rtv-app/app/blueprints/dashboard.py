@@ -78,14 +78,23 @@ def summary():
         "Pending", "Received", "Approved", "Rejected",
         "Shipped to Supplier", "Completed", "Cancelled",
     )
-    return jsonify(
-        {
-            "status_counts": {s: status_counts.get(s, 0) for s in all_status},
-            "total_kerugian_estimasi": total_kerugian,
-            "peringatan_stok": jsonable(peringatan),
-            "threshold": threshold,
-        }
-    )
+
+    awal_bulan = datetime.datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    bulan_ini = db.rtv_transactions.count_documents({**match_filter, "tgl_input": {"$gte": awal_bulan}})
+
+    result = {
+        "status_counts": {s: status_counts.get(s, 0) for s in all_status},
+        "total_kerugian_estimasi": total_kerugian,
+        "peringatan_stok": jsonable(peringatan),
+        "threshold": threshold,
+        "bulan_ini": bulan_ini,
+    }
+
+    if g.user.get("role") == "staff_toko":
+        # "Perlu tindakan": retur ditolak yang masih bisa diajukan ulang oleh toko ini.
+        result["perlu_tindakan"] = status_counts.get("Rejected", 0)
+
+    return jsonify(result)
 
 
 @bp.get("/rekap-supplier")

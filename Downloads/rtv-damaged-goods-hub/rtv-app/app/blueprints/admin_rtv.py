@@ -1,6 +1,7 @@
 """
 Fitur Admin/Supervisor: Verifikasi RTV (Approve/Reject), Buat Surat Jalan
-ke Supplier, Tandai Transaksi Completed (input hasil klaim).
+ke Supplier, Tandai Transaksi Completed (input hasil klaim vendor
+terstruktur: status, nilai kredit, nomor credit note).
 """
 import datetime
 
@@ -13,10 +14,14 @@ from ..utils import (
     jsonable,
     require_fields,
     sanitize_str,
+    to_decimal128,
     to_object_id,
 )
+from .extras import money, nilai_rtv, notify
 
 bp = Blueprint("admin_rtv", __name__)
+
+KLAIM_STATUS = ("Diajukan", "Disetujui Penuh", "Disetujui Sebagian", "Ditolak")
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +37,7 @@ def dashboard_verifikasi():
     for d in cursor:
         store = db.master_store.find_one({"_id": d["store_id"]}, {"nama_store": 1, "kode_store": 1})
         d["store"] = store
+        d["nilai_estimasi"] = nilai_rtv(d)
         items.append(jsonable(d))
     return jsonify({"items": items})
 
@@ -41,12 +47,13 @@ def dashboard_verifikasi():
 def verifikasi_rtv(rtv_id):
     """
     Setujui RTV (Received -> Approved) atau Tolak RTV (Received -> Rejected).
-    Body: {"approve": true/false}
+    Body: {"approve": true/false, "catatan": "opsional, alasan jika ditolak"}
     Update atomik mencegah RTV yang sama diverifikasi dua kali bersamaan.
     """
     data = request.get_json(silent=True) or {}
     require_fields(data, ["approve"])
     approve = bool(data["approve"])
+    catatan = sanitize_str(data.get("catatan", ""), max_len=500, field="Catatan", required=False, allow_empty=True)
 
     db = get_db()
     oid = to_object_id(rtv_id, field="rtv_id")
@@ -62,6 +69,7 @@ def verifikasi_rtv(rtv_id):
         {
             "$set": {
                 "status": new_status,
+                "catatan_verifikasi": catatan or None,
                 "diverifikasi_oleh": {"id": g.user["_id"], "nama": g.user.get("nama")},
                 "tgl_verifikasi": now,
             }
@@ -79,6 +87,22 @@ def verifikasi_rtv(rtv_id):
         "rtv_transactions", oid, "verifikasi",
         before={"status": existing["status"]}, after={"status": new_status},
     )
+
+    if approve:
+        notify(
+            db, "staff_toko",
+            "Retur disetujui",
+            "%s telah disetujui dan akan diproses ke supplier." % updated["no_rtv"],
+            rtv_id=oid, store_id=updated.get("store_id"), link="toko-status", tipe="success",
+        )
+    else:
+        notify(
+            db, "staff_toko",
+            "Retur ditolak",
+            "%s ditolak.%s" % (updated["no_rtv"], (" Alasan: " + catatan) if catatan else ""),
+            rtv_id=oid, store_id=updated.get("store_id"), link="toko-status", tipe="error",
+        )
+
     return jsonify({"item": jsonable(updated)})
 
 
@@ -164,6 +188,7 @@ def buat_surat_jalan():
         "dibuat_oleh": {"id": g.user["_id"], "nama": g.user.get("nama")},
         "tgl_selesai": None,
         "hasil_klaim": None,
+        "klaim": None,
     }
     shipment_result = db.rtv_shipments.insert_one(shipment_doc)
     shipment_doc["_id"] = shipment_result.inserted_id
@@ -206,6 +231,7 @@ def list_surat_jalan():
         s["items"] = items
         s["jumlah_item"] = len(items)
         s["status_items"] = items[0]["status"] if items else None
+        s["total_nilai"] = sum(nilai_rtv(it) for it in items)
         results.append(jsonable(s))
     return jsonify({"items": results})
 
@@ -213,10 +239,34 @@ def list_surat_jalan():
 @bp.post("/surat-jalan/<shipment_id>/selesai")
 @role_required("admin")
 def selesaikan_klaim(shipment_id):
-    """Input hasil_klaim dari pabrik -> Shipped to Supplier -> Completed (final)."""
+    """
+    Input hasil klaim dari supplier -> Shipped to Supplier -> Completed (final).
+
+    Body minimal (kompatibel dengan versi lama): {"hasil_klaim": "teks bebas"}
+    Body lengkap (disarankan): {
+        "hasil_klaim": "teks bebas / ringkasan",
+        "klaim_status": salah satu dari KLAIM_STATUS,
+        "nilai_kredit": angka (Rp kredit/penggantian yang disetujui supplier),
+        "no_credit_note": "opsional"
+    }
+    """
     data = request.get_json(silent=True) or {}
     require_fields(data, ["hasil_klaim"])
     hasil_klaim = sanitize_str(data["hasil_klaim"], max_len=1000, field="Hasil klaim")
+
+    klaim_status = data.get("klaim_status")
+    if klaim_status:
+        if klaim_status not in KLAIM_STATUS:
+            raise ApiError(
+                "klaim_status harus salah satu dari: %s." % ", ".join(KLAIM_STATUS),
+                code="validation_error",
+            )
+    nilai_kredit = None
+    if data.get("nilai_kredit") not in (None, ""):
+        nilai_kredit = to_decimal128(data["nilai_kredit"], field="nilai_kredit")
+    no_credit_note = sanitize_str(
+        data.get("no_credit_note", ""), max_len=64, field="No. Credit Note", required=False, allow_empty=True
+    )
 
     db = get_db()
     oid = to_object_id(shipment_id, field="shipment_id")
@@ -227,18 +277,36 @@ def selesaikan_klaim(shipment_id):
         raise ApiError("Klaim untuk surat jalan ini sudah diselesaikan sebelumnya.", status_code=409, code="conflict")
 
     now = datetime.datetime.utcnow()
+    klaim_payload = {
+        "status": klaim_status or "Disetujui Penuh",
+        "nilai_kredit": nilai_kredit,
+        "no_credit_note": no_credit_note or None,
+        "diinput_oleh": {"id": g.user["_id"], "nama": g.user.get("nama")},
+        "tgl": now,
+    }
     updated_shipment = db.rtv_shipments.find_one_and_update(
         {"_id": oid, "tgl_selesai": None},
-        {"$set": {"tgl_selesai": now, "hasil_klaim": hasil_klaim}},
+        {"$set": {"tgl_selesai": now, "hasil_klaim": hasil_klaim, "klaim": klaim_payload}},
         return_document=True,
     )
     if not updated_shipment:
         raise ApiError("Klaim sudah diselesaikan oleh pihak lain.", status_code=409, code="conflict")
 
+    item_ids = [it["_id"] for it in db.rtv_transactions.find({"shipment_id": oid}, {"_id": 1})]
     db.rtv_transactions.update_many(
         {"shipment_id": oid, "status": "Shipped to Supplier"},
         {"$set": {"status": "Completed"}},
     )
 
     record_audit("rtv_shipments", oid, "selesaikan_klaim", after=jsonable(updated_shipment))
+
+    if item_ids:
+        kredit_txt = (" Kredit diterima: Rp %s." % format(money(nilai_kredit), ",.0f")) if nilai_kredit else ""
+        notify(
+            db, "staff_toko",
+            "Klaim retur selesai",
+            "Surat jalan %s selesai diproses supplier.%s" % (updated_shipment["no_surat_jalan"], kredit_txt),
+            link="toko-status",
+        )
+
     return jsonify({"shipment": jsonable(updated_shipment)})

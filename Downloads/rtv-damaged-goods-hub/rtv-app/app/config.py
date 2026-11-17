@@ -25,7 +25,25 @@ class Config:
 
     # --- Aplikasi ---
     JSON_SORT_KEYS = False
-    MAX_CONTENT_LENGTH = 2 * 1024 * 1024  # 2 MB, batas ukuran body request
+    # Batas body request. Foto bukti dikirim sebagai data-URL ter-kompresi
+    # (maks 3 foto x ~450 KB), jadi 4 MB. Batas Vercel sendiri adalah 4,5 MB.
+    MAX_CONTENT_LENGTH = 4 * 1024 * 1024
+
+    # --- Identitas aplikasi (ubah di sini / lewat environment variable untuk ganti nama) ---
+    APP_NAME = os.environ.get("APP_NAME", "RTV & Damaged Goods Hub")
+    APP_SHORT_NAME = os.environ.get("APP_SHORT_NAME", "RTV Hub")
+    APP_SUBTITLE = os.environ.get("APP_SUBTITLE", "Damaged Goods")
+    APP_TAGLINE = os.environ.get("APP_TAGLINE", "Masuk untuk mengelola retur barang rusak")
+    APP_VERSION = "2.0.0"  # juga dipakai sebagai penanda cache file CSS/JS
+
+    # --- Keamanan login ---
+    LOGIN_MAX_FAILS = int(os.environ.get("LOGIN_MAX_FAILS", "5"))
+    LOGIN_WINDOW_MINUTES = int(os.environ.get("LOGIN_WINDOW_MINUTES", "15"))
+    LOGIN_LOCK_MINUTES = int(os.environ.get("LOGIN_LOCK_MINUTES", "15"))
+
+    # --- Umur stok karantina (hari) ---
+    AGING_WARN_DAYS = int(os.environ.get("AGING_WARN_DAYS", "14"))
+    AGING_CRITICAL_DAYS = int(os.environ.get("AGING_CRITICAL_DAYS", "30"))
 
     # --- Batas toleransi stok karantina (fitur peringatan) ---
     STOK_RUSAK_WARNING_THRESHOLD = int(

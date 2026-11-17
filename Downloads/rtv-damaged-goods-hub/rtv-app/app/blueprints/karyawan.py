@@ -1,6 +1,7 @@
 """
 Kelola Karyawan - khusus Admin (lihat use case: Kelola Karyawan, dengan
-extend Nonaktifkan Karyawan dan Pindahkan Karyawan ke Toko Lain).
+extend Nonaktifkan Karyawan dan Pindahkan Karyawan ke Toko Lain, serta
+Setujui/Tolak akun hasil pendaftaran mandiri).
 """
 import datetime
 
@@ -28,22 +29,89 @@ def _validate_nik(value):
     return value
 
 
+def _validate_email(value, required=False):
+    if not value:
+        if required:
+            raise ApiError("Email wajib diisi.", code="validation_error")
+        return None
+    value = sanitize_str(value, max_len=150, field="Email")
+    if "@" not in value or "." not in value.split("@")[-1] or " " in value:
+        raise ApiError("Format email tidak valid.", code="validation_error")
+    return value.lower()
+
+
+def _with_meta(d, stores, shifts):
+    store = stores.get(d.get("store_id"))
+    shift = shifts.get(d.get("shift_id"))
+    d["store_nama"] = store["nama_store"] if store else None
+    d["shift_nama"] = shift["nama_shift"] if shift else None
+    return d
+
+
 @bp.get("")
 @role_required("admin")
 def list_karyawan():
     db = get_db()
-    cursor = db.master_karyawan.find({}).sort("nama", 1)
+    # Akun hasil pendaftaran mandiri yang masih menunggu persetujuan tidak
+    # ditampilkan di daftar utama -> dikelola lewat tab "Menunggu Persetujuan".
+    cursor = db.master_karyawan.find({"menunggu_persetujuan": {"$ne": True}}).sort("nama", 1)
     stores = {s["_id"]: s for s in db.master_store.find({})}
     shifts = {s["_id"]: s for s in db.master_shift.find({})}
     items = []
     for d in cursor:
         d.pop("password_hash", None)
-        store = stores.get(d.get("store_id"))
-        shift = shifts.get(d.get("shift_id"))
-        d["store_nama"] = store["nama_store"] if store else None
-        d["shift_nama"] = shift["nama_shift"] if shift else None
-        items.append(jsonable(d))
+        items.append(jsonable(_with_meta(d, stores, shifts)))
     return jsonify({"items": items})
+
+
+@bp.get("/menunggu")
+@role_required("admin")
+def list_menunggu():
+    """Daftar akun hasil pendaftaran mandiri yang menunggu persetujuan admin."""
+    db = get_db()
+    cursor = db.master_karyawan.find({"menunggu_persetujuan": True}).sort("tgl_mulai_penempatan", 1)
+    stores = {s["_id"]: s for s in db.master_store.find({})}
+    shifts = {s["_id"]: s for s in db.master_shift.find({})}
+    items = []
+    for d in cursor:
+        d.pop("password_hash", None)
+        items.append(jsonable(_with_meta(d, stores, shifts)))
+    return jsonify({"items": items})
+
+
+@bp.post("/<item_id>/setujui")
+@role_required("admin")
+def setujui_karyawan(item_id):
+    db = get_db()
+    oid = to_object_id(item_id, field="id")
+    existing = db.master_karyawan.find_one({"_id": oid, "menunggu_persetujuan": True})
+    if not existing:
+        raise ApiError("Akun yang menunggu persetujuan tidak ditemukan.", status_code=404, code="not_found")
+
+    db.master_karyawan.update_one(
+        {"_id": oid},
+        {"$set": {"aktif": True, "menunggu_persetujuan": False, "tgl_nonaktif": None}},
+    )
+    updated = db.master_karyawan.find_one({"_id": oid})
+    safe_after = {k: v for k, v in updated.items() if k != "password_hash"}
+    record_audit("master_karyawan", oid, "setujui_pendaftaran", after=jsonable(safe_after))
+    return jsonify({"item": jsonable(safe_after)})
+
+
+@bp.post("/<item_id>/tolak")
+@role_required("admin")
+def tolak_karyawan(item_id):
+    """Tolak pendaftaran mandiri -> akun dihapus permanen (belum pernah dipakai login)."""
+    db = get_db()
+    oid = to_object_id(item_id, field="id")
+    existing = db.master_karyawan.find_one({"_id": oid, "menunggu_persetujuan": True})
+    if not existing:
+        raise ApiError("Akun yang menunggu persetujuan tidak ditemukan.", status_code=404, code="not_found")
+
+    safe_before = {k: v for k, v in existing.items() if k != "password_hash"}
+    db.master_karyawan.delete_one({"_id": oid})
+    record_audit("master_karyawan", oid, "tolak_pendaftaran", before=jsonable(safe_before))
+    return jsonify({"ok": True})
 
 
 @bp.post("")
@@ -76,19 +144,24 @@ def create_karyawan():
         if not db.master_shift.find_one({"_id": shift_id}):
             raise ApiError("Shift tidak ditemukan.", status_code=404, code="not_found")
 
+    email = _validate_email(data.get("email"))
+
     now = datetime.datetime.utcnow()
     doc = {
         "nik": nik,
         "nama": sanitize_str(data["nama"], max_len=150, field="Nama"),
         "username": username,
+        "email": email,
         "password_hash": hash_password(password),
         "role": role,
         "store_id": store_id,
         "shift_id": shift_id,
         "aktif": True,
+        "menunggu_persetujuan": False,
         "tgl_nonaktif": None,
         "tgl_mulai_penempatan": now,
         "riwayat_penempatan": [],
+        "notif_seen_at": now,
     }
     result = db.master_karyawan.insert_one(doc)
     doc["_id"] = result.inserted_id
@@ -110,6 +183,8 @@ def update_karyawan(item_id):
     updates = {}
     if "nama" in data:
         updates["nama"] = sanitize_str(data["nama"], max_len=150, field="Nama")
+    if "email" in data:
+        updates["email"] = _validate_email(data["email"])
     if "role" in data:
         updates["role"] = one_of(data["role"], Config.ROLES, field="role")
     if "shift_id" in data:

@@ -263,8 +263,8 @@ var RtvLogin = (function () {
       RtvUI.el("div", { class: "rtv-login-logo" }, [
         RtvUI.el("div", { class: "rtv-logo-badge" }, [RtvUI.el("i", { class: "fa-solid fa-boxes-stacked" })]),
         RtvUI.el("div", {}, [
-          RtvUI.el("h1", {}, ["RTV & Damaged Goods Hub"]),
-          RtvUI.el("p", {}, ["Masuk untuk mengelola retur barang rusak"]),
+          RtvUI.el("h1", {}, [(window.RTV_APP && window.RTV_APP.name) || "RTV & Damaged Goods Hub"]),
+          RtvUI.el("p", {}, [(window.RTV_APP && window.RTV_APP.tagline) || "Masuk untuk mengelola retur barang rusak"]),
         ]),
       ]),
       body,

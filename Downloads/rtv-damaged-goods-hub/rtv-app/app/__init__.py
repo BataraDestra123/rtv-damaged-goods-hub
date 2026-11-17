@@ -2,9 +2,10 @@
 Application factory untuk Sistem RTV & Damaged Goods Hub.
 """
 import datetime
+import json
 import logging
 
-from flask import Flask, jsonify, render_template, session
+from flask import Flask, jsonify, render_template, request, session
 
 from .config import get_config
 from .security import ApiError
@@ -25,6 +26,15 @@ def create_app():
     register_error_handlers(app)
     register_misc_routes(app)
 
+    @app.after_request
+    def add_headers(response):
+        # Respons API tidak boleh di-cache (data berubah terus); header keamanan dasar.
+        if request.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
+        return response
+
     @app.teardown_appcontext
     def close_db(exception=None):
         # Koneksi MongoClient di-cache secara modul-level (lihat app/db.py),
@@ -43,6 +53,7 @@ def register_blueprints(app):
     from .blueprints.karyawan import bp as karyawan_bp
     from .blueprints.dashboard import bp as dashboard_bp
     from .blueprints.common import bp as common_bp
+    from .blueprints.extras import bp as extras_bp
 
     app.register_blueprint(auth_bp, url_prefix="/api/auth")
     app.register_blueprint(toko_bp, url_prefix="/api/toko")
@@ -52,6 +63,7 @@ def register_blueprints(app):
     app.register_blueprint(karyawan_bp, url_prefix="/api/karyawan")
     app.register_blueprint(dashboard_bp, url_prefix="/api/dashboard")
     app.register_blueprint(common_bp, url_prefix="/api")
+    app.register_blueprint(extras_bp, url_prefix="/api/x")
 
 
 def register_error_handlers(app):
@@ -91,6 +103,30 @@ def register_misc_routes(app):
     @app.get("/")
     def index():
         return render_template("index.html")
+
+    @app.context_processor
+    def inject_app_info():
+        cfg = app.config
+        # Satu string JSON siap-pakai untuk window.RTV_APP di index.html.
+        # Dibuat sebagai SATU nilai (bukan field per field) supaya editor
+        # kode (VS Code dkk) tidak salah membaca sintaks Jinja {{ }} di
+        # dalam blok <script> sebagai JavaScript tidak valid.
+        rtv_app_json = json.dumps(
+            {
+                "name": cfg["APP_NAME"],
+                "shortName": cfg["APP_SHORT_NAME"],
+                "subtitle": cfg["APP_SUBTITLE"],
+                "tagline": cfg["APP_TAGLINE"],
+            }
+        )
+        return {
+            "app_name": cfg["APP_NAME"],
+            "app_short_name": cfg["APP_SHORT_NAME"],
+            "app_subtitle": cfg["APP_SUBTITLE"],
+            "app_tagline": cfg["APP_TAGLINE"],
+            "asset_v": cfg["APP_VERSION"],
+            "rtv_app_json": rtv_app_json,
+        }
 
     @app.get("/api/health")
     def health():
