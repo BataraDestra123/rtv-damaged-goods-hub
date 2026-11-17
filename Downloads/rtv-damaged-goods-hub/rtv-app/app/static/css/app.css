@@ -497,3 +497,39 @@ table.rtv-table tbody tr:last-child td { border-bottom: none; }
   .rtv-modal { max-width: 100%; }
   .rtv-login-card { padding: 28px 22px 24px; }
 }
+/* ---------------- Login: lupa password & daftar akun ---------------- */
+
+.rtv-login-subtitle { margin: 0; font-size: 16px; font-weight: 700; color: var(--rtv-text); }
+.rtv-login-desc { margin: -6px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--rtv-text-muted); }
+
+.rtv-field-success {
+  color: var(--rtv-green);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-weight: 500;
+}
+.rtv-field-success:empty { display: none; }
+
+.rtv-login-links { display: flex; justify-content: center; margin-top: -4px; }
+.rtv-login-link {
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rtv-primary);
+  cursor: pointer;
+}
+.rtv-login-link:hover { color: var(--rtv-primary-dark); text-decoration: underline; }
+
+.rtv-login-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--rtv-text-faint);
+  font-size: 12px;
+}
+.rtv-login-divider::before,
+.rtv-login-divider::after { content: ""; flex: 1; height: 1px; background: var(--rtv-border); }
+
+.rtv-login-card .rtv-btn-ghost { padding: 11px; font-size: 14px; }
