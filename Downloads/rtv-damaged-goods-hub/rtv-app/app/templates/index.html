@@ -25,10 +25,13 @@
        app/config.py (atau environment variable di Vercel) untuk mengubah nama
        aplikasi di seluruh tampilan tanpa menyentuh file JS.
        Catatan: data ditaruh di tag type="application/json" (bukan JavaScript)
-       supaya Jinja {{ }} di dalamnya TIDAK pernah diparse/divalidasi sebagai
-       JavaScript oleh editor kode (VS Code dkk) — jadi tidak akan pernah ada
-       error "Property assignment expected" lagi, dalam kondisi apa pun. Lalu
-       script biasa di bawahnya membaca isinya dengan JSON.parse(). -->
+       supaya tanda kurung kurawal ganda milik Jinja di dalamnya tidak pernah
+       diparse/divalidasi sebagai JavaScript oleh editor kode (VS Code dkk).
+       PENTING: jangan tulis tanda kurung kurawal ganda secara harfiah di
+       dalam komentar HTML mana pun di file ini -- Jinja2 memindai SELURUH isi
+       file ini mencari tanda itu, termasuk di dalam komentar, dan akan gagal
+       compile (TemplateSyntaxError) kalau menemukan tanda kosong seperti itu.
+       Lalu script biasa di bawah ini membaca isinya dengan JSON.parse(). -->
   <script id="rtv-app-data" type="application/json">{{ rtv_app_json|safe }}</script>
   <script>
     window.RTV_APP = JSON.parse(document.getElementById("rtv-app-data").textContent);
