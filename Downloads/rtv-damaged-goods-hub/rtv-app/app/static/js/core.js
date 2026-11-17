@@ -1,7 +1,13 @@
 /**
  * Core UI toolkit — vanilla JS replacement for Webix.
  * Provides: DOM builder, toast, modal, confirm dialog, simple table
- * renderer, and a tiny hash router. No external dependencies.
+ * renderer, and a tiny hash router. No external dependencies, kecuali
+ * notifikasi toast: jika library Webix (dimuat via CDN di index.html)
+ * tersedia di window.webix, toast() akan memakai webix.message() agar
+ * tampilannya konsisten dengan komponen Webix. Jika Webix gagal dimuat
+ * (misalnya karena tidak ada koneksi internet saat membuka halaman),
+ * toast otomatis kembali memakai implementasi vanilla di bawah ini,
+ * jadi aplikasi tetap berjalan normal tanpa Webix sama sekali.
  */
 var RtvUI = (function () {
   "use strict";
@@ -63,8 +69,29 @@ var RtvUI = (function () {
   }
 
   function toast(message, type, duration) {
-    var stack = ensureToastStack();
     type = type || "info";
+    duration = duration || 3800;
+
+    // Pakai Webix untuk notifikasi toast jika library-nya berhasil dimuat
+    // (lihat <script src="https://cdn.webix.com/edge/webix.js"> di
+    // index.html). webix.message adalah komponen notifikasi bawaan Webix.
+    if (window.webix && typeof window.webix.message === "function") {
+      try {
+        window.webix.message({
+          text: escapeHtml(message),
+          type: type === "error" ? "error" : type === "success" ? "success" : "info",
+          expire: duration,
+        });
+        return;
+      } catch (e) {
+        // Jika terjadi error tak terduga pada Webix, lanjut ke fallback
+        // vanilla di bawah supaya notifikasi tetap muncul.
+      }
+    }
+
+    // Fallback vanilla (dipakai juga bila Webix tidak tersedia sama sekali,
+    // misalnya CDN gagal dimuat karena tidak ada koneksi internet).
+    var stack = ensureToastStack();
     var icon = type === "success" ? "fa-circle-check" : type === "error" ? "fa-circle-exclamation" : "fa-circle-info";
     var node = el("div", { class: "rtv-toast " + type }, [
       el("i", { class: "fa-solid " + icon }),
@@ -76,7 +103,7 @@ var RtvUI = (function () {
       node.style.opacity = "0";
       node.style.transform = "translateX(16px)";
       setTimeout(function () { node.remove(); }, 260);
-    }, duration || 3800);
+    }, duration);
   }
 
   // ---------------- Modal ----------------
@@ -145,6 +172,33 @@ var RtvUI = (function () {
 
   function confirmDialog(opts) {
     opts = opts || {};
+
+    // Pakai dialog konfirmasi bawaan Webix (webix.confirm) kalau library-nya
+    // berhasil dimuat (lihat <script src="https://cdn.webix.com/edge/webix.js">
+    // di index.html). Dipakai di SELURUH aplikasi lewat RtvUI.confirmDialog,
+    // jadi setiap konfirmasi (setujui/tolak RTV, hapus data master, nonaktifkan
+    // karyawan, dll) otomatis tampil pakai komponen Webix asli -- bukan cuma
+    // hiasan CDN yang tidak dipakai. Promise yang dikembalikan tetap sama
+    // persis seperti sebelumnya (resolve(true)/resolve(false)), jadi semua
+    // kode yang sudah memanggil RtvUI.confirmDialog(...) tidak perlu diubah.
+    if (window.webix && typeof window.webix.confirm === "function") {
+      try {
+        return window.webix
+          .confirm({
+            title: opts.title || "Konfirmasi",
+            text: escapeHtml(opts.text || ""),
+            ok: opts.okText || "Ya, Lanjutkan",
+            cancel: opts.cancelText || "Batal",
+            type: opts.danger ? "confirm-warning" : "confirm",
+          })
+          .then(function () { return true; })
+          .catch(function () { return false; });
+      } catch (e) {
+        // Lanjut ke fallback vanilla di bawah kalau Webix error tak terduga.
+      }
+    }
+
+    // Fallback vanilla (dipakai juga bila Webix tidak tersedia sama sekali).
     return new Promise(function (resolve) {
       var handle = openModal({
         title: opts.title || "Konfirmasi",
